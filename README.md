@@ -46,9 +46,9 @@ Set a thought as temporary (e.g., "Don't bring up my job search for a week"). Ec
 - **Frontend:** To be finalized
 - **Backend:** To be finalized
 - **Database:** MongoDB Atlas
-AI / LLM: Google Gemini 3.8 Flash
-Embeddings: Google Gemini Embedding 001
-Database: MongoDB Atlas with Vector Search
+- AI / LLM: Google Gemini 3.8 Flash
+- Embeddings: Google Gemini Embedding 001
+- Database: MongoDB Atlas with Vector Search
 
 ---
 
@@ -143,9 +143,9 @@ Echo is a journaling and memory-management tool, not a substitute for profession
 
 ## 👥 The Team
 
-- **Member 1:** Backend & MongoDB Architecture
-- **Member 2:** Frontend & UI/UX
-- **Member 3:** Integration, Deployment & QA
+- **Kunal Mahale:** Backend & MongoDB Architecture
+- **Urmil Parmar:** Frontend & UI/UX
+- **Mahathi SS:** Integration, Deployment & QA
 
 ---
 
