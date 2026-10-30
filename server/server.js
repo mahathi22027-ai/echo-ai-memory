@@ -1,0 +1,647 @@
+/**
+ * ECHO Backend Server - Node.js + Express (ES Modules)
+ * MongoDB Student Hackathon · PS1: Agentic Memory
+ * 
+ * Features:
+ * - Native 'mongodb' driver for MongoDB Atlas
+ * - Groq API (llama-3.3-70b-versatile) for chat & memory extraction
+ * - OpenAI API (text-embedding-3-small) for 1536-dimensional embeddings
+ * - MongoDB Vector Search ($vectorSearch) with metadata filters
+ * - Expiry / TTL handling, privacy shields, and superseding version control
+ */
+
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import { connectDB, getDB, ObjectId, getIsConnected } from './db.js';
+import { 
+  getEmbedding, 
+  extractMemories, 
+  generateContextualAnswer, 
+  cosineSimilarity 
+} from './ai.js';
+
+dotenv.config();
+
+const app = express();
+const PORT = process.env.PORT || 5000;
+
+// Enable CORS for frontend running on Vite (default port 5173) or any origin in dev
+app.use(cors({
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id']
+}));
+
+app.use(express.json());
+
+// Helper to extract authenticated or default user ID
+function getUserId(req) {
+  return req.headers['x-user-id'] || req.body?.user_id || req.query?.user_id || 'demo_user';
+}
+
+// Convert MongoDB document ObjectId to string
+function serializeDoc(doc) {
+  if (!doc) return doc;
+  const serialized = { ...doc };
+  if (serialized._id) {
+    serialized._id = serialized._id.toString();
+  }
+  return serialized;
+}
+
+// ==========================================
+// 1. POST /api/chat - Ingestion & Extraction (or Recall query)
+// ==========================================
+app.post('/api/chat', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const text = (req.body.text || req.body.message || '').trim();
+    const mode = req.body.mode || 'journal';
+
+    if (!text) {
+      return res.status(400).json({ success: false, error: 'Text or message is required' });
+    }
+
+    // If frontend calls /api/chat in 'query' mode, route to semantic query handler!
+    if (mode === 'query' || text.endsWith('?') && req.body.mode !== 'journal') {
+      return handleQueryLogic(req, res, text, userId);
+    }
+
+    const db = getDB();
+
+    // 1. Save original journal entry to `journal_entries` collection
+    const journalEntry = {
+      user_id: userId,
+      text,
+      created_at: new Date()
+    };
+    const entryResult = await db.collection('journal_entries').insertOne(journalEntry);
+    const entryId = entryResult.insertedId.toString();
+
+    // 2. Extract structured memories via Groq LLM (llama-3.3-70b-versatile)
+    console.log(`[POST /api/chat] Extracting memories from entry for user: ${userId}...`);
+    const extractedList = await extractMemories(text);
+
+    // 3. For each extracted memory: generate embedding, calculate expires_at, insert to memories
+    const insertedMemories = [];
+
+    for (const mem of extractedList) {
+      // Generate 1536-dim embedding via OpenAI
+      const embedding = await getEmbedding(`${mem.type}: ${mem.content}`);
+
+      // Calculate expires_at: if is_temporary, set to 24h from now
+      const expiresAt = mem.is_temporary 
+        ? new Date(Date.now() + 24 * 60 * 60 * 1000) 
+        : null;
+
+      const memoryDoc = {
+        user_id: userId,
+        entry_id: entryId,
+        type: mem.type,
+        content: mem.content,
+        source_quote: mem.source_quote,
+        embedding,
+        status: 'active',
+        is_private: false,
+        expires_at: expiresAt,
+        supersedes_id: null,
+        created_at: new Date()
+      };
+
+      const result = await db.collection('memories').insertOne(memoryDoc);
+      const insertedId = result.insertedId.toString();
+
+      const savedMemory = { ...memoryDoc, _id: insertedId };
+      insertedMemories.push(savedMemory);
+
+      // Record audit event in `memory_events` collection
+      await db.collection('memory_events').insertOne({
+        user_id: userId,
+        memory_id: insertedId,
+        event_type: 'memory_created',
+        timestamp: new Date(),
+        metadata: {
+          type: mem.type,
+          source_entry_id: entryId,
+          content_summary: mem.content.slice(0, 50)
+        }
+      });
+    }
+
+    console.log(`[POST /api/chat] Successfully stored ${insertedMemories.length} memories.`);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Journal entry processed and memories extracted.',
+      reply: `I've ingested your reflection and extracted ${insertedMemories.length} structured memories into your MongoDB vault.`,
+      mode: 'journal',
+      extractedMemories: insertedMemories.map(serializeDoc),
+      memories: insertedMemories.map(serializeDoc)
+    });
+  } catch (error) {
+    console.error('[POST /api/chat Error]:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
+// 2. POST /api/query - Semantic Vector Recall & Contextual Response
+// ==========================================
+app.post('/api/query', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const query = (req.body.query || req.body.message || '').trim();
+    if (!query) {
+      return res.status(400).json({ success: false, error: 'Query is required' });
+    }
+    return handleQueryLogic(req, res, query, userId);
+  } catch (error) {
+    console.error('[POST /api/query Error]:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Common handler for semantic vector search query
+async function handleQueryLogic(req, res, query, userId) {
+  const db = getDB();
+  const now = new Date();
+
+  console.log(`[Query] Generating query embedding for: "${query.slice(0, 60)}"...`);
+  const queryEmbedding = await getEmbedding(query);
+
+  let retrievedMemories = [];
+  const similarityScores = {};
+
+  // Exact filter required by the specification:
+  // user_id, status: "active", is_private: false, and expires_at is null or in the future
+  const vectorFilter = {
+    user_id: userId,
+    status: 'active',
+    is_private: false,
+    $or: [
+      { expires_at: null },
+      { expires_at: { $gt: now } }
+    ]
+  };
+
+  // 1. Attempt Native MongoDB Atlas $vectorSearch
+  let usedNativeVectorSearch = false;
+  try {
+    const pipeline = [
+      {
+        $vectorSearch: {
+          index: 'vector_index',
+          path: 'embedding',
+          queryVector: queryEmbedding,
+          numCandidates: 50,
+          limit: 3,
+          filter: vectorFilter
+        }
+      },
+      {
+        $project: {
+          _id: 1,
+          user_id: 1,
+          entry_id: 1,
+          type: 1,
+          content: 1,
+          source_quote: 1,
+          status: 1,
+          is_private: 1,
+          expires_at: 1,
+          supersedes_id: 1,
+          created_at: 1,
+          score: { $meta: 'vectorSearchScore' }
+        }
+      }
+    ];
+
+    const results = await db.collection('memories').aggregate(pipeline).toArray();
+    if (results && results.length > 0) {
+      retrievedMemories = results;
+      usedNativeVectorSearch = true;
+      results.forEach(doc => {
+        similarityScores[doc._id.toString()] = Number((doc.score || 0.85).toFixed(2));
+      });
+      console.log(`[Vector Search] Native Atlas $vectorSearch matched ${results.length} memories.`);
+    }
+  } catch (vectorErr) {
+    // If filter fields weren't declared in Atlas vector index, try $vectorSearch without filter + $match
+    try {
+      const fallbackPipeline = [
+        {
+          $vectorSearch: {
+            index: 'vector_index',
+            path: 'embedding',
+            queryVector: queryEmbedding,
+            numCandidates: 50,
+            limit: 20
+          }
+        },
+        {
+          $match: vectorFilter
+        },
+        {
+          $limit: 3
+        },
+        {
+          $project: {
+            _id: 1,
+            user_id: 1,
+            entry_id: 1,
+            type: 1,
+            content: 1,
+            source_quote: 1,
+            status: 1,
+            is_private: 1,
+            expires_at: 1,
+            supersedes_id: 1,
+            created_at: 1,
+            score: { $meta: 'vectorSearchScore' }
+          }
+        }
+      ];
+      const results = await db.collection('memories').aggregate(fallbackPipeline).toArray();
+      if (results && results.length > 0) {
+        retrievedMemories = results;
+        usedNativeVectorSearch = true;
+        results.forEach(doc => {
+          similarityScores[doc._id.toString()] = Number((doc.score || 0.85).toFixed(2));
+        });
+        console.log(`[Vector Search] Native Atlas $vectorSearch (post-filter) matched ${results.length} memories.`);
+      }
+    } catch (secondErr) {
+      console.warn(`[Vector Search Notice] Native Atlas $vectorSearch stage not active (${secondErr.message}). Using in-memory cosine fallback over eligible documents.`);
+    }
+  }
+
+  // 2. In-Memory Cosine Fallback (if Atlas search index is pending or running locally)
+  if (!usedNativeVectorSearch) {
+    const eligibleDocs = await db.collection('memories').find(vectorFilter).toArray();
+
+    const scored = eligibleDocs.map(doc => {
+      const score = cosineSimilarity(queryEmbedding, doc.embedding);
+      return { doc, score };
+    });
+
+    // Sort by cosine similarity descending
+    scored.sort((a, b) => b.score - a.score);
+
+    // Apply relevance gate (threshold >= 0.50) and limit 3
+    const topMatches = scored.filter(s => s.score >= 0.50).slice(0, 3);
+    retrievedMemories = topMatches.map(s => {
+      const serialized = serializeDoc(s.doc);
+      similarityScores[serialized._id] = Number(s.score.toFixed(2));
+      return serialized;
+    });
+    console.log(`[Cosine Fallback] Scored ${eligibleDocs.length} eligible documents. Matched ${retrievedMemories.length} relevant memories.`);
+  }
+
+  // 3. Count private memories for privacy shield verification
+  const privateCount = await db.collection('memories').countDocuments({
+    user_id: userId,
+    is_private: true
+  });
+
+  // 4. Send query + retrieved memories to Groq LLM (llama-3.3-70b-versatile)
+  const answer = await generateContextualAnswer(query, retrievedMemories);
+
+  const memoriesUsedIds = retrievedMemories.map(m => m._id.toString());
+
+  // 5. Log audit event to `memory_events`
+  await db.collection('memory_events').insertOne({
+    user_id: userId,
+    memory_id: memoriesUsedIds[0] || 'none',
+    event_type: 'vector_recall',
+    timestamp: new Date(),
+    metadata: {
+      query: query.slice(0, 80),
+      memories_retrieved_count: retrievedMemories.length,
+      private_shielded_count: privateCount
+    }
+  });
+
+  return res.status(200).json({
+    success: true,
+    mode: 'query',
+    answer,
+    reply: answer, // for frontend compatibility
+    memoriesUsed: memoriesUsedIds,
+    referencedMemories: memoriesUsedIds,
+    similarityScores,
+    privacyShieldedCount: privateCount,
+    memories: retrievedMemories.map(serializeDoc)
+  });
+}
+
+// ==========================================
+// 3. GET /api/memories - List Memories
+// ==========================================
+app.get('/api/memories', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { status, type } = req.query;
+    const db = getDB();
+
+    const query = { user_id: userId };
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+    if (type && type !== 'all') {
+      query.type = type;
+    }
+
+    const list = await db.collection('memories')
+      .find(query)
+      .sort({ created_at: -1 })
+      .toArray();
+
+    // Check expiry in real-time: if expires_at is past, flag status as 'expired'
+    const now = new Date();
+    const serialized = list.map(doc => {
+      const item = serializeDoc(doc);
+      if (item.expires_at && new Date(item.expires_at) <= now && item.status !== 'expired') {
+        item.status = 'expired';
+      }
+      return item;
+    });
+
+    return res.status(200).json({
+      success: true,
+      count: serialized.length,
+      memories: serialized
+    });
+  } catch (error) {
+    console.error('[GET /api/memories Error]:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
+// 4. PATCH /api/memories/:id/supersede - Supersede / Correct a Memory
+// ==========================================
+app.patch('/api/memories/:id/supersede', async (req, res) => {
+  return handleSupersede(req, res);
+});
+
+async function handleSupersede(req, res) {
+  try {
+    const { id } = req.params;
+    const userId = getUserId(req);
+    const newContent = req.body.newContent || req.body.supersedeWith?.content;
+    const newType = req.body.newType || req.body.supersedeWith?.type;
+    const newQuote = req.body.newQuote || req.body.supersedeWith?.source_quote;
+
+    if (!newContent) {
+      return res.status(400).json({ success: false, error: 'newContent is required to supersede a memory' });
+    }
+
+    const db = getDB();
+    const queryId = ObjectId.isValid(id) ? new ObjectId(id) : id;
+
+    // 1. Locate old memory
+    const oldMemory = await db.collection('memories').findOne({
+      _id: queryId,
+      user_id: userId
+    });
+
+    if (!oldMemory) {
+      return res.status(404).json({ success: false, error: 'Memory not found' });
+    }
+
+    // 2. Generate embedding for newContent
+    const embedding = await getEmbedding(`${newType || oldMemory.type}: ${newContent}`);
+
+    // 3. Insert new memory document with status: "active", supersedes_id: oldId
+    const newMemoryDoc = {
+      user_id: userId,
+      entry_id: oldMemory.entry_id,
+      type: newType || oldMemory.type,
+      content: newContent,
+      source_quote: newQuote || oldMemory.source_quote,
+      embedding,
+      status: 'active',
+      is_private: false,
+      expires_at: null,
+      supersedes_id: oldMemory._id.toString(),
+      created_at: new Date()
+    };
+
+    const insertResult = await db.collection('memories').insertOne(newMemoryDoc);
+    const newMemoryId = insertResult.insertedId.toString();
+
+    // 4. Update old memory status to "superseded"
+    await db.collection('memories').updateOne(
+      { _id: queryId },
+      { $set: { status: 'superseded' } }
+    );
+
+    // 5. Audit log event
+    await db.collection('memory_events').insertOne({
+      user_id: userId,
+      memory_id: newMemoryId,
+      event_type: 'memory_superseded',
+      timestamp: new Date(),
+      metadata: {
+        superseded_memory_id: oldMemory._id.toString(),
+        new_memory_id: newMemoryId,
+        type: newMemoryDoc.type
+      }
+    });
+
+    console.log(`[Supersede] Old memory ${id} superseded by new memory ${newMemoryId}`);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Memory successfully superseded.',
+      supersededId: oldMemory._id.toString(),
+      supersededMemory: serializeDoc({ ...oldMemory, status: 'superseded' }),
+      newMemory: serializeDoc({ ...newMemoryDoc, _id: newMemoryId })
+    });
+  } catch (error) {
+    console.error('[PATCH /api/memories/:id/supersede Error]:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+// ==========================================
+// 5. PATCH /api/memories/:id/privacy - Toggle Privacy
+// ==========================================
+app.patch('/api/memories/:id/privacy', async (req, res) => {
+  return handlePrivacyToggle(req, res);
+});
+
+async function handlePrivacyToggle(req, res) {
+  try {
+    const { id } = req.params;
+    const userId = getUserId(req);
+    const isPrivate = Boolean(req.body.is_private);
+
+    const db = getDB();
+    const queryId = ObjectId.isValid(id) ? new ObjectId(id) : id;
+
+    const oldMem = await db.collection('memories').findOne({ _id: queryId, user_id: userId });
+    if (!oldMem) {
+      return res.status(404).json({ success: false, error: 'Memory not found' });
+    }
+
+    const nextStatus = isPrivate ? 'private' : 'active';
+
+    await db.collection('memories').updateOne(
+      { _id: queryId },
+      { $set: { is_private: isPrivate, status: nextStatus } }
+    );
+
+    // Audit log
+    await db.collection('memory_events').insertOne({
+      user_id: userId,
+      memory_id: id,
+      event_type: isPrivate ? 'memory_marked_private' : 'memory_unhidden',
+      timestamp: new Date(),
+      metadata: {
+        is_private: isPrivate,
+        status: nextStatus
+      }
+    });
+
+    console.log(`[Privacy] Memory ${id} is_private set to ${isPrivate}`);
+
+    return res.status(200).json({
+      success: true,
+      id,
+      is_private: isPrivate,
+      status: nextStatus
+    });
+  } catch (error) {
+    console.error('[PATCH /api/memories/:id/privacy Error]:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+// ==========================================
+// 6. Unified PATCH /api/memories/:id - Handles supersede, privacy, or expiry
+// ==========================================
+app.patch('/api/memories/:id', async (req, res) => {
+  if (req.body.supersedeWith || req.body.newContent) {
+    return handleSupersede(req, res);
+  }
+  if (req.body.is_private !== undefined) {
+    return handlePrivacyToggle(req, res);
+  }
+
+  // Handle setting/clearing expiry
+  try {
+    const { id } = req.params;
+    const userId = getUserId(req);
+    const expiresAt = req.body.expires_at ? new Date(req.body.expires_at) : null;
+
+    const db = getDB();
+    const queryId = ObjectId.isValid(id) ? new ObjectId(id) : id;
+
+    await db.collection('memories').updateOne(
+      { _id: queryId, user_id: userId },
+      { $set: { expires_at: expiresAt } }
+    );
+
+    await db.collection('memory_events').insertOne({
+      user_id: userId,
+      memory_id: id,
+      event_type: 'memory_expiry_configured',
+      timestamp: new Date(),
+      metadata: { expires_at: expiresAt }
+    });
+
+    return res.status(200).json({ success: true, id, expires_at: expiresAt });
+  } catch (error) {
+    console.error('[PATCH /api/memories/:id Error]:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
+// 7. DELETE /api/memories/:id - Delete Memory
+// ==========================================
+app.delete('/api/memories/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = getUserId(req);
+    const db = getDB();
+    const queryId = ObjectId.isValid(id) ? new ObjectId(id) : id;
+
+    const existing = await db.collection('memories').findOne({ _id: queryId, user_id: userId });
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Memory not found' });
+    }
+
+    await db.collection('memories').deleteOne({ _id: queryId, user_id: userId });
+
+    await db.collection('memory_events').insertOne({
+      user_id: userId,
+      memory_id: id,
+      event_type: 'memory_deleted',
+      timestamp: new Date(),
+      metadata: { type: existing.type }
+    });
+
+    console.log(`[Delete] Deleted memory ${id}`);
+    return res.status(200).json({ success: true, deletedId: id });
+  } catch (error) {
+    console.error('[DELETE /api/memories/:id Error]:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
+// 8. GET /api/memory-events - System Log & Audit Feed
+// ==========================================
+app.get('/api/memory-events', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const db = getDB();
+
+    const events = await db.collection('memory_events')
+      .find({ user_id: userId })
+      .sort({ timestamp: -1 })
+      .limit(50)
+      .toArray();
+
+    return res.status(200).json({
+      success: true,
+      events: events.map(serializeDoc)
+    });
+  } catch (error) {
+    console.error('[GET /api/memory-events Error]:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
+// 9. GET /api/health - System Health Check
+// ==========================================
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'online',
+    timestamp: new Date().toISOString(),
+    database: getIsConnected() ? 'connected (MongoDB Atlas / local)' : 'running (in-memory mode)',
+    llm: process.env.GROQ_API_KEY ? 'Groq llama-3.3-70b-versatile' : 'Local fallback simulation',
+    embeddings: process.env.OPENAI_API_KEY ? 'OpenAI text-embedding-3-small' : 'Deterministic 1536-dim vector'
+  });
+});
+
+// Start Server & Connect to DB
+async function startServer() {
+  await connectDB();
+  app.listen(PORT, () => {
+    console.log('====================================================');
+    console.log(`🚀 ECHO Backend API running at http://localhost:${PORT}`);
+    console.log(`📡 Health Check: http://localhost:${PORT}/api/health`);
+    console.log(`🗄️  MongoDB: ${getIsConnected() ? 'CONNECTED' : 'IN-MEMORY FALLBACK (configure MONGODB_URI)'}`);
+    console.log('====================================================');
+  });
+}
+
+startServer();
+
+export default app;

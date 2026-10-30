@@ -1,0 +1,19 @@
+{
+  "name": "echo-backend",
+  "version": "1.0.0",
+  "description": "Backend API for Echo - Private AI Journal with Evolving Memory",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "seed": "node seed.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "mongodb": "^6.8.0",
+    "openai": "^4.55.0"
+  }
+}

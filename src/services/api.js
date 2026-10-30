@@ -102,22 +102,32 @@ export async function testBackendConnection(customUrl) {
 export async function sendChatMessage({ message, mode = 'journal', userId = 'user_123' }) {
   const config = getApiConfig();
 
-  // If Live mode requested or Auto mode detects backend:
-  if (config.mode === 'live') {
+  // If Live mode or Auto mode is active, attempt live backend first:
+  if (config.mode === 'live' || config.mode === 'auto') {
     try {
-      const res = await fetch(`${config.baseUrl}/chat`, {
+      // Direct to /api/query if mode is 'query', or /api/chat with full payload
+      const endpoint = mode === 'query' ? `${config.baseUrl}/query` : `${config.baseUrl}/chat`;
+      const bodyPayload = mode === 'query' 
+        ? { query: message, message, mode, user_id: userId }
+        : { text: message, message, mode, user_id: userId };
+
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-user-id': userId
         },
-        body: JSON.stringify({ message, mode, user_id: userId })
+        body: JSON.stringify(bodyPayload)
       });
-      if (!res.ok) throw new Error(`Server returned ${res.status}`);
-      return await res.json();
+      if (res.ok) {
+        return await res.json();
+      }
+      if (config.mode === 'live') {
+        throw new Error(`Server returned ${res.status}`);
+      }
     } catch (err) {
-      console.warn('Live API request failed, falling back to mock engine:', err.message);
-      // Fall through to mock engine so the UI never breaks during demos
+      if (config.mode === 'live') throw err;
+      console.warn('Live API request failed, using mock fallback:', err.message);
     }
   }
 
@@ -131,11 +141,11 @@ export async function sendChatMessage({ message, mode = 'journal', userId = 'use
 export async function fetchMemories({ status, type, userId = 'user_123' } = {}) {
   const config = getApiConfig();
 
-  if (config.mode === 'live') {
+  if (config.mode === 'live' || config.mode === 'auto') {
     try {
       const params = new URLSearchParams();
-      if (status) params.append('status', status);
-      if (type) params.append('type', type);
+      if (status && status !== 'all') params.append('status', status);
+      if (type && type !== 'all') params.append('type', type);
 
       const res = await fetch(`${config.baseUrl}/memories?${params.toString()}`, {
         method: 'GET',
@@ -144,9 +154,14 @@ export async function fetchMemories({ status, type, userId = 'user_123' } = {}) 
           'x-user-id': userId
         }
       });
-      if (!res.ok) throw new Error(`Server returned ${res.status}`);
-      return await res.json();
+      if (res.ok) {
+        return await res.json();
+      }
+      if (config.mode === 'live') {
+        throw new Error(`Server returned ${res.status}`);
+      }
     } catch (err) {
+      if (config.mode === 'live') throw err;
       console.warn('Live API memories fetch failed, using local store:', err.message);
     }
   }
@@ -181,7 +196,7 @@ export async function fetchMemories({ status, type, userId = 'user_123' } = {}) 
 export async function updateMemory(id, patchData, userId = 'user_123') {
   const config = getApiConfig();
 
-  if (config.mode === 'live') {
+  if (config.mode === 'live' || config.mode === 'auto') {
     try {
       const res = await fetch(`${config.baseUrl}/memories/${id}`, {
         method: 'PATCH',
@@ -191,9 +206,14 @@ export async function updateMemory(id, patchData, userId = 'user_123') {
         },
         body: JSON.stringify(patchData)
       });
-      if (!res.ok) throw new Error(`Server returned ${res.status}`);
-      return await res.json();
+      if (res.ok) {
+        return await res.json();
+      }
+      if (config.mode === 'live') {
+        throw new Error(`Server returned ${res.status}`);
+      }
     } catch (err) {
+      if (config.mode === 'live') throw err;
       console.warn('Live API update failed, updating locally:', err.message);
     }
   }
@@ -320,7 +340,7 @@ export async function updateMemory(id, patchData, userId = 'user_123') {
 export async function deleteMemory(id, userId = 'user_123') {
   const config = getApiConfig();
 
-  if (config.mode === 'live') {
+  if (config.mode === 'live' || config.mode === 'auto') {
     try {
       const res = await fetch(`${config.baseUrl}/memories/${id}`, {
         method: 'DELETE',
@@ -329,9 +349,14 @@ export async function deleteMemory(id, userId = 'user_123') {
           'x-user-id': userId
         }
       });
-      if (!res.ok) throw new Error(`Server returned ${res.status}`);
-      return await res.json();
+      if (res.ok) {
+        return await res.json();
+      }
+      if (config.mode === 'live') {
+        throw new Error(`Server returned ${res.status}`);
+      }
     } catch (err) {
+      if (config.mode === 'live') throw err;
       console.warn('Live API delete failed, deleting locally:', err.message);
     }
   }
@@ -366,7 +391,7 @@ export async function deleteMemory(id, userId = 'user_123') {
 export async function fetchMemoryEvents({ userId = 'user_123' } = {}) {
   const config = getApiConfig();
 
-  if (config.mode === 'live') {
+  if (config.mode === 'live' || config.mode === 'auto') {
     try {
       const res = await fetch(`${config.baseUrl}/memory-events`, {
         method: 'GET',
@@ -375,9 +400,14 @@ export async function fetchMemoryEvents({ userId = 'user_123' } = {}) {
           'x-user-id': userId
         }
       });
-      if (!res.ok) throw new Error(`Server returned ${res.status}`);
-      return await res.json();
+      if (res.ok) {
+        return await res.json();
+      }
+      if (config.mode === 'live') {
+        throw new Error(`Server returned ${res.status}`);
+      }
     } catch (err) {
+      if (config.mode === 'live') throw err;
       console.warn('Live API events fetch failed, using local store:', err.message);
     }
   }
