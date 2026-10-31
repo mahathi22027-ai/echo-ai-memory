@@ -8,8 +8,8 @@ Echo is a private, AI-powered journaling application built for the **MongoDB Stu
 
 ## 🔗 Live Links & Media
 
-- **Live Frontend:** [Deploying to Vercel/Render]
-- **Live API Backend:** [Deploying to Render]
+- **Live Application (Frontend):** [https://echo-ai-memory-woad.vercel.app/](https://echo-ai-memory-woad.vercel.app/)
+- **Live API Backend:** [https://echo-ai-memory.onrender.com/api/health](https://echo-ai-memory.onrender.com/api/health)
 - **Demo Video:** Coming soon
 - **Presentation Deck (PPT):** [Google Drive Presentation Slides](https://drive.google.com/drive/folders/1xw4U0sCrN8pbvLPVlLoAlrkvSnVBmLPe?usp=share_link)
 - **Repository:** [https://github.com/mahathi22027-ai/echo-ai-memory](https://github.com/mahathi22027-ai/echo-ai-memory)
