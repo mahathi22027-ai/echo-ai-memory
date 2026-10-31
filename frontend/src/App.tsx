@@ -147,22 +147,22 @@ export default function App() {
   const [loading, setLoading] = useState(false)
 
   // Real backend-driven state
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: 'msg_welcome_1',
-      sender: 'user',
-      content: 'I took the long way through the park before work today. The air was cool, everything was quiet, and I felt much clearer by the time I opened my laptop. I keep wondering what it would feel like to stop filling every open space in my calendar.',
-      timestamp: 'Today, 9:42 AM',
-      mode: 'journal'
-    },
-    {
-      id: 'msg_welcome_2',
-      sender: 'echo',
-      content: 'It sounds like the walk gave you something your schedule hasn’t lately: room to arrive before having to perform. There’s a gentle question underneath this entry—whether a slower rhythm might actually help you move with more intention.',
-      timestamp: 'Today, 9:42 AM',
-      mode: 'journal'
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    try {
+      const saved = localStorage.getItem('echo_chat_history_' + (readStoredUser(sessionKey)?.email || 'guest'))
+      return saved ? JSON.parse(saved) : [
+        {
+          id: 'msg_welcome_echo',
+          sender: 'echo',
+          content: 'Welcome to your private Echo space. Write a journal reflection to extract structured memories, or switch to "Ask Echo" to query your memory vault.',
+          timestamp: 'Just now',
+          mode: 'journal'
+        }
+      ]
+    } catch {
+      return []
     }
-  ])
+  })
 
   const [memories, setMemories] = useState<Memory[]>([])
   const [events, setEvents] = useState<MemoryEvent[]>([])
@@ -551,7 +551,19 @@ export default function App() {
         </div>
 
         <nav className="primary-nav" aria-label="Primary navigation">
-          <button className="nav-action is-primary" onClick={() => { setMode('Journal Entry'); setDraft(''); }}><Icon name="edit" /><span>New journal</span><kbd>⌘ K</kbd></button>
+          <button className="nav-action is-primary" onClick={() => {
+            setMode('Journal Entry');
+            setDraft('');
+            setMessages([
+              {
+                id: 'msg_' + Date.now(),
+                sender: 'echo',
+                content: 'Started a fresh reflection. What is on your mind today?',
+                timestamp: 'Just now',
+                mode: 'journal'
+              }
+            ]);
+          }}><Icon name="edit" /><span>New journal</span><kbd>⌘ K</kbd></button>
           <button className="nav-action" onClick={() => { setMode('Ask Echo'); setDraft(''); }}><Icon name="search" /><span>Search memories</span><kbd>⌘ /</kbd></button>
         </nav>
 
@@ -646,26 +658,35 @@ export default function App() {
                       <p style={{ whiteSpace: 'pre-wrap' }}>{message.content}</p>
                     </div>
 
-                    {message.referencedMemories && message.referencedMemories.length > 0 && (
-                      <div className="memory-references">
-                        {message.referencedMemories.map((memId) => {
-                          const matched = memories.find((m) => m._id === memId)
-                          return (
-                            <button
-                              key={memId}
-                              onClick={() => {
-                                setSelectedMemoryId(memId)
-                                setInspectorOpen(true)
-                              }}
-                              className={selectedMemoryId === memId ? 'selected' : ''}
-                            >
-                              <Icon name="brain" size={15} />
-                              {matched ? matched.content.slice(0, 32) + '...' : `Memory ${memId.slice(0, 6)}`}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    )}
+                    {message.referencedMemories && message.referencedMemories.length > 0 && (() => {
+                      // Filter out any referenced memories that are currently marked private or no longer active
+                      const visibleRefs = message.referencedMemories.filter((memId) => {
+                        const matched = memories.find((m) => m._id === memId)
+                        return matched && !matched.is_private && matched.status !== 'private'
+                      })
+                      if (visibleRefs.length === 0) return null
+
+                      return (
+                        <div className="memory-references">
+                          {visibleRefs.map((memId) => {
+                            const matched = memories.find((m) => m._id === memId)
+                            return (
+                              <button
+                                key={memId}
+                                onClick={() => {
+                                  setSelectedMemoryId(memId)
+                                  setInspectorOpen(true)
+                                }}
+                                className={selectedMemoryId === memId ? 'selected' : ''}
+                              >
+                                <Icon name="brain" size={15} />
+                                {matched ? matched.content.slice(0, 32) + '...' : `Memory ${memId.slice(0, 6)}`}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )
+                    })()}
 
                     <div className="message-tools">
                       <span style={{ fontSize: '11px', color: 'var(--subtle)' }}>{message.timestamp}</span>
