@@ -1,0 +1,10 @@
+{
+  "description": "A private, AI-powered journal for capturing conversations, finding personal memories, and managing what Echo remembers with transparent privacy controls.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

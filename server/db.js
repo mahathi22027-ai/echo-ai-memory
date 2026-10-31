@@ -5,6 +5,8 @@
  */
 
 import { MongoClient, ObjectId } from 'mongodb';
+import dns from 'dns';
+try { dns.setServers(['8.8.8.8', '1.1.1.1']); } catch (e) {}
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -180,8 +182,8 @@ export async function connectDB() {
   try {
     console.log(`Connecting to MongoDB at: ${uri.replace(/\/\/([^:]+):([^@]+)@/, '//$1:****@')}...`);
     client = new MongoClient(uri, {
-      serverSelectionTimeoutMS: 4000,
-      connectTimeoutMS: 5000
+      serverSelectionTimeoutMS: 15000,
+      connectTimeoutMS: 15000
     });
 
     await client.connect();
