@@ -155,11 +155,12 @@ export function AppProvider({ children }) {
       const aiMsg = {
         id: `msg_${Date.now() + 1}`,
         sender: 'echo',
-        text: response.reply,
+        text: response.reply || response.answer,
         mode: response.mode || mode,
+        actionTaken: response.actionTaken,
         timestamp: new Date().toISOString(),
         extractedMemories: response.extractedMemories ? response.extractedMemories.map(m => m._id) : undefined,
-        referencedMemories: response.referencedMemories || undefined,
+        referencedMemories: response.referencedMemories || response.memoriesUsed || undefined,
         similarityScores: response.similarityScores || undefined,
         supersededMemoryId: response.supersededMemoryId || undefined,
         privacyShieldedCount: response.privacyShieldedCount || 0
@@ -170,8 +171,25 @@ export function AppProvider({ children }) {
       // If new memories or events created, refresh inspector & system log
       await refreshAllData();
 
-      // Automatically highlight provenance if a memory was retrieved
-      if (response.referencedMemories && response.referencedMemories.length > 0) {
+      // Notifications and highlighting
+      if (response.mode === 'auto') {
+        if (response.actionTaken === 'SUPERSEDE_OLD') {
+          showToast('Auto Agent: Outdated memory superseded with updated resolution', 'success');
+          if (response.extractedMemories?.[0]?._id) {
+            setHighlightedMemoryId(response.extractedMemories[0]._id);
+          }
+        } else if (response.actionTaken === 'SAVE_NEW') {
+          showToast('Auto Agent: Extracted and saved new memory into vault', 'success');
+          if (response.extractedMemories?.[0]?._id) {
+            setHighlightedMemoryId(response.extractedMemories[0]._id);
+          }
+        } else {
+          showToast('Auto Agent: Recalled context from memory vault', 'info');
+          if (response.referencedMemories?.[0]) {
+            setHighlightedMemoryId(response.referencedMemories[0]);
+          }
+        }
+      } else if (response.referencedMemories && response.referencedMemories.length > 0) {
         setHighlightedMemoryId(response.referencedMemories[0]);
         showToast(`Recalled memory ${response.referencedMemories[0]} with semantic match!`, 'success');
       } else if (response.extractedMemories && response.extractedMemories.length > 0) {

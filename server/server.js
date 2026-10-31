@@ -18,6 +18,7 @@ import {
   getEmbedding, 
   extractMemories, 
   generateContextualAnswer, 
+  evaluateAgenticMemory,
   cosineSimilarity 
 } from './ai.js';
 
@@ -62,6 +63,11 @@ app.post('/api/chat', async (req, res) => {
 
     if (!text) {
       return res.status(400).json({ success: false, error: 'Text or message is required' });
+    }
+
+    // If frontend calls /api/chat in 'auto' mode, route to autonomous agentic memory handler!
+    if (mode === 'auto') {
+      return handleAutoLogic(req, res, text, userId);
     }
 
     // If frontend calls /api/chat in 'query' mode, route to semantic query handler!
@@ -163,19 +169,31 @@ app.post('/api/query', async (req, res) => {
   }
 });
 
-// Common handler for semantic vector search query
-async function handleQueryLogic(req, res, query, userId) {
-  const db = getDB();
-  const now = new Date();
+// ==========================================
+// 2b. POST /api/auto - Autonomous Agentic Memory Pipeline
+// ==========================================
+app.post('/api/auto', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const text = (req.body.text || req.body.message || req.body.query || '').trim();
+    if (!text) {
+      return res.status(400).json({ success: false, error: 'Text or message is required' });
+    }
+    return handleAutoLogic(req, res, text, userId);
+  } catch (error) {
+    console.error('[POST /api/auto Error]:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
 
-  console.log(`[Query] Generating query embedding for: "${query.slice(0, 60)}"...`);
-  const queryEmbedding = await getEmbedding(query);
+// Reusable vector memory retrieval with Atlas Vector Search + Cosine Fallback
+async function retrieveRelevantMemories(db, userId, queryText, queryEmbedding = null) {
+  const now = new Date();
+  const embedding = queryEmbedding || await getEmbedding(queryText);
 
   let retrievedMemories = [];
   const similarityScores = {};
 
-  // Exact filter required by the specification:
-  // user_id, status: "active", is_private: false, and expires_at is null or in the future
   const vectorFilter = {
     user_id: userId,
     status: 'active',
@@ -194,7 +212,7 @@ async function handleQueryLogic(req, res, query, userId) {
         $vectorSearch: {
           index: 'vector_index',
           path: 'embedding',
-          queryVector: queryEmbedding,
+          queryVector: embedding,
           numCandidates: 50,
           limit: 3,
           filter: vectorFilter
@@ -228,24 +246,19 @@ async function handleQueryLogic(req, res, query, userId) {
       console.log(`[Vector Search] Native Atlas $vectorSearch matched ${results.length} memories.`);
     }
   } catch (vectorErr) {
-    // If filter fields weren't declared in Atlas vector index, try $vectorSearch without filter + $match
     try {
       const fallbackPipeline = [
         {
           $vectorSearch: {
             index: 'vector_index',
             path: 'embedding',
-            queryVector: queryEmbedding,
+            queryVector: embedding,
             numCandidates: 50,
             limit: 20
           }
         },
-        {
-          $match: vectorFilter
-        },
-        {
-          $limit: 3
-        },
+        { $match: vectorFilter },
+        { $limit: 3 },
         {
           $project: {
             _id: 1,
@@ -277,19 +290,17 @@ async function handleQueryLogic(req, res, query, userId) {
     }
   }
 
-  // 2. In-Memory Cosine Fallback (if Atlas search index is pending or running locally)
+  // 2. In-Memory Cosine Fallback
   if (!usedNativeVectorSearch) {
     const eligibleDocs = await db.collection('memories').find(vectorFilter).toArray();
 
     const scored = eligibleDocs.map(doc => {
-      const score = cosineSimilarity(queryEmbedding, doc.embedding);
+      const score = cosineSimilarity(embedding, doc.embedding);
       return { doc, score };
     });
 
-    // Sort by cosine similarity descending
     scored.sort((a, b) => b.score - a.score);
 
-    // Apply relevance gate (threshold >= 0.50) and limit 3
     const topMatches = scored.filter(s => s.score >= 0.50).slice(0, 3);
     retrievedMemories = topMatches.map(s => {
       const serialized = serializeDoc(s.doc);
@@ -299,18 +310,23 @@ async function handleQueryLogic(req, res, query, userId) {
     console.log(`[Cosine Fallback] Scored ${eligibleDocs.length} eligible documents. Matched ${retrievedMemories.length} relevant memories.`);
   }
 
-  // 3. Count private memories for privacy shield verification
+  // 3. Count private memories for privacy shield
   const privateCount = await db.collection('memories').countDocuments({
     user_id: userId,
     is_private: true
   });
 
-  // 4. Send query + retrieved memories to Groq LLM (llama-3.3-70b-versatile)
-  const answer = await generateContextualAnswer(query, retrievedMemories);
+  return { retrievedMemories, similarityScores, privateCount, queryEmbedding: embedding };
+}
 
+// Common handler for semantic vector search query
+async function handleQueryLogic(req, res, query, userId) {
+  const db = getDB();
+  const { retrievedMemories, similarityScores, privateCount } = await retrieveRelevantMemories(db, userId, query);
+
+  const answer = await generateContextualAnswer(query, retrievedMemories);
   const memoriesUsedIds = retrievedMemories.map(m => m._id.toString());
 
-  // 5. Log audit event to `memory_events`
   await db.collection('memory_events').insertOne({
     user_id: userId,
     memory_id: memoriesUsedIds[0] || 'none',
@@ -333,6 +349,193 @@ async function handleQueryLogic(req, res, query, userId) {
     similarityScores,
     privacyShieldedCount: privateCount,
     memories: retrievedMemories.map(serializeDoc)
+  });
+}
+
+// Handler for Autonomous Agentic Memory Pipeline (/api/auto)
+async function handleAutoLogic(req, res, text, userId) {
+  const db = getDB();
+
+  // 1. Record journal entry in journal_entries
+  const journalEntry = {
+    user_id: userId,
+    text,
+    mode: 'auto',
+    created_at: new Date()
+  };
+  const entryResult = await db.collection('journal_entries').insertOne(journalEntry);
+  const entryId = entryResult.insertedId.toString();
+
+  // 2. Retrieve top past memories using vector search + cosine fallback
+  const { retrievedMemories, similarityScores, privateCount } = await retrieveRelevantMemories(db, userId, text);
+  const memoriesUsedIds = retrievedMemories.map(m => m._id.toString());
+
+  // 3. Autonomous Reasoning & Action Decision (Groq LLM)
+  console.log(`[Auto Agent] Evaluating input with ${retrievedMemories.length} recalled memories for user: ${userId}...`);
+  const aiData = await evaluateAgenticMemory(text, retrievedMemories);
+  console.log(`[Auto Agent] Decision: ${aiData.action}${aiData.supersede_id ? ' -> target: ' + aiData.supersede_id : ''}`);
+
+  let insertedMemory = null;
+  let supersededId = null;
+
+  // 4. Execute DB mutations based on decided action
+  if (aiData.action === 'SAVE_NEW' && aiData.new_memory) {
+    const mem = aiData.new_memory;
+    const embedding = await getEmbedding(`${mem.type}: ${mem.content}`);
+    const expiresAt = mem.is_temporary ? new Date(Date.now() + 24 * 60 * 60 * 1000) : null;
+
+    const memoryDoc = {
+      user_id: userId,
+      entry_id: entryId,
+      type: mem.type,
+      content: mem.content,
+      source_quote: mem.source_quote,
+      embedding,
+      status: 'active',
+      is_private: false,
+      expires_at: expiresAt,
+      supersedes_id: null,
+      created_at: new Date()
+    };
+
+    const result = await db.collection('memories').insertOne(memoryDoc);
+    const insertedId = result.insertedId.toString();
+    insertedMemory = { ...memoryDoc, _id: insertedId };
+
+    await db.collection('memory_events').insertOne({
+      user_id: userId,
+      memory_id: insertedId,
+      event_type: 'memory_created',
+      timestamp: new Date(),
+      metadata: {
+        type: mem.type,
+        source_entry_id: entryId,
+        mode: 'auto',
+        action: 'SAVE_NEW',
+        content_summary: mem.content.slice(0, 50)
+      }
+    });
+  } else if (aiData.action === 'SUPERSEDE_OLD' && aiData.new_memory) {
+    const mem = aiData.new_memory;
+    let targetOldId = aiData.supersede_id;
+    let oldMemory = null;
+
+    if (targetOldId) {
+      const queryId = ObjectId.isValid(targetOldId) ? new ObjectId(targetOldId) : targetOldId;
+      oldMemory = await db.collection('memories').findOne({ _id: queryId, user_id: userId });
+    }
+
+    if (!oldMemory && retrievedMemories.length > 0) {
+      const fallbackId = retrievedMemories[0]._id;
+      const queryId = ObjectId.isValid(fallbackId) ? new ObjectId(fallbackId) : fallbackId;
+      oldMemory = await db.collection('memories').findOne({ _id: queryId, user_id: userId });
+    }
+
+    if (oldMemory) {
+      supersededId = oldMemory._id.toString();
+      const embedding = await getEmbedding(`${mem.type}: ${mem.content}`);
+      const expiresAt = mem.is_temporary ? new Date(Date.now() + 24 * 60 * 60 * 1000) : null;
+
+      const newMemoryDoc = {
+        user_id: userId,
+        entry_id: entryId,
+        type: mem.type || oldMemory.type,
+        content: mem.content,
+        source_quote: mem.source_quote || oldMemory.source_quote,
+        embedding,
+        status: 'active',
+        is_private: false,
+        expires_at: expiresAt,
+        supersedes_id: supersededId,
+        created_at: new Date()
+      };
+
+      const insertResult = await db.collection('memories').insertOne(newMemoryDoc);
+      const newMemoryId = insertResult.insertedId.toString();
+      insertedMemory = { ...newMemoryDoc, _id: newMemoryId };
+
+      const queryId = ObjectId.isValid(supersededId) ? new ObjectId(supersededId) : supersededId;
+      await db.collection('memories').updateOne({ _id: queryId }, { $set: { status: 'superseded' } });
+
+      await db.collection('memory_events').insertOne({
+        user_id: userId,
+        memory_id: newMemoryId,
+        event_type: 'memory_superseded',
+        timestamp: new Date(),
+        metadata: {
+          mode: 'auto',
+          action: 'SUPERSEDE_OLD',
+          superseded_memory_id: supersededId,
+          new_memory_id: newMemoryId,
+          type: newMemoryDoc.type
+        }
+      });
+    } else {
+      // Fallback to SAVE_NEW if target old memory not found
+      const embedding = await getEmbedding(`${mem.type}: ${mem.content}`);
+      const memoryDoc = {
+        user_id: userId,
+        entry_id: entryId,
+        type: mem.type,
+        content: mem.content,
+        source_quote: mem.source_quote,
+        embedding,
+        status: 'active',
+        is_private: false,
+        expires_at: null,
+        supersedes_id: null,
+        created_at: new Date()
+      };
+      const result = await db.collection('memories').insertOne(memoryDoc);
+      const insertedId = result.insertedId.toString();
+      insertedMemory = { ...memoryDoc, _id: insertedId };
+
+      await db.collection('memory_events').insertOne({
+        user_id: userId,
+        memory_id: insertedId,
+        event_type: 'memory_created',
+        timestamp: new Date(),
+        metadata: {
+          type: mem.type,
+          source_entry_id: entryId,
+          mode: 'auto',
+          action: 'SAVE_NEW_FALLBACK',
+          content_summary: mem.content.slice(0, 50)
+        }
+      });
+    }
+  } else {
+    // NO_SAVE: Log vector_recall
+    await db.collection('memory_events').insertOne({
+      user_id: userId,
+      memory_id: memoriesUsedIds[0] || 'none',
+      event_type: 'vector_recall',
+      timestamp: new Date(),
+      metadata: {
+        query: text.slice(0, 80),
+        mode: 'auto',
+        action: 'NO_SAVE',
+        memories_retrieved_count: retrievedMemories.length,
+        private_shielded_count: privateCount
+      }
+    });
+  }
+
+  const replyText = aiData.reply || 'Processed your thought in Auto Mode.';
+
+  return res.status(200).json({
+    success: true,
+    mode: 'auto',
+    reply: replyText,
+    answer: replyText,
+    actionTaken: aiData.action,
+    memoriesUsed: memoriesUsedIds,
+    referencedMemories: memoriesUsedIds,
+    extractedMemories: insertedMemory ? [serializeDoc(insertedMemory)] : [],
+    memories: insertedMemory ? [serializeDoc(insertedMemory)] : retrievedMemories.map(serializeDoc),
+    supersededMemoryId: supersededId,
+    similarityScores,
+    privacyShieldedCount: privateCount
   });
 }
 

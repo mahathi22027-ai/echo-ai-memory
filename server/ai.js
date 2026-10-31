@@ -264,19 +264,25 @@ function localFallbackExtract(text) {
 
 function generateSummaryFromText(text, type) {
   const lower = text.toLowerCase();
+  if (lower.includes('presentation') && (lower.includes('scared') || lower.includes('nervous') || lower.includes('fear') || lower.includes('stress'))) {
+    return 'Felt scared and anxious about delivering upcoming first presentation';
+  }
+  if (lower.includes('presentation') && (lower.includes('confident') || lower.includes('gave') || lower.includes('finished') || lower.includes('handled'))) {
+    return 'Completed first presentation and gained confidence for future public speaking';
+  }
   if (lower.includes('friend') && (lower.includes('effort') || lower.includes('hurt') || lower.includes('value'))) {
-    return 'Feels hurt and uncared for in friendship reciprocity.';
+    return 'Felt hurt and uncared for in friendship reciprocity';
   }
   if (lower.includes('improved') || lower.includes('talked it out')) {
-    return 'Reconciled with friends; emotional clarity and peace restored.';
+    return 'Reconciled with friends; emotional clarity and peace restored';
   }
   if (lower.includes('routine') || lower.includes('morning')) {
-    return 'Maintains a structured morning routine as foundational anchor for creative focus.';
+    return 'Maintains a structured morning routine as foundational anchor for creative focus';
   }
   if (lower.includes('cafe') || lower.includes('quiet') || lower.includes('coding')) {
-    return 'Prefers quiet, low-friction workspaces for deep programming sessions.';
+    return 'Prefers quiet, low-friction workspaces for deep programming sessions';
   }
-  return `${type.charAt(0).toUpperCase() + type.slice(1)}: ${text.slice(0, 75).trim()}...`;
+  return text.slice(0, 85).trim().replace(/[.?!]+$/, '');
 }
 
 /**
@@ -295,4 +301,225 @@ function localFallbackAnswer(query, retrievedMemories) {
     return `Looking back at your journal, you noted: "${top.source_quote}". You've previously found that keeping to your core habits and routine gave you clarity in moments like this.`;
   }
   return `I found a relevant ${top.type} memory in your vault: "${top.content}" (from your quote: "${top.source_quote}"). Does this connect with what you're thinking about right now?`;
+}
+
+/**
+ * Autonomous Agentic Memory Evaluation
+ * Analyzes text + past memories to generate an answer and determine DB action:
+ * - 'SAVE_NEW': Insert new memory
+ * - 'SUPERSEDE_OLD': Replace an existing contradicted memory
+ * - 'NO_SAVE': Pure question or greeting, do not mutate memory collection
+ */
+export async function evaluateAgenticMemory(text, pastMemories = []) {
+  if (!text || typeof text !== 'string') {
+    return {
+      reply: "I couldn't process an empty message.",
+      action: 'NO_SAVE',
+      new_memory: null,
+      supersede_id: null
+    };
+  }
+
+  // If Groq key is missing or dummy, use smart local rule-based agentic evaluator
+  if (!groqApiKey || groqApiKey.startsWith('your_') || groqApiKey === 'dummy_groq_key') {
+    return localFallbackAgentic(text, pastMemories);
+  }
+
+  const pastContext = pastMemories.length > 0
+    ? pastMemories.map((m, idx) => {
+        const idStr = m._id?.toString() || `mem_${idx}`;
+        return `[ID: ${idStr}] Type: ${m.type} | Summary: "${m.content}" | Source Quote: "${m.source_quote}"`;
+      }).join('\n')
+    : 'No active relevant past memories found.';
+
+  const systemPrompt = `You are Echo, an empathetic, supportive, personal AI journal companion with continuous evolving memory.
+You are having an authentic, heartfelt conversation with the user while intelligently maintaining their private memory vault.
+
+Available Past Memories Retrieved from the User's Vault:
+${pastContext}
+
+YOUR DUAL OBJECTIVE:
+1. 'reply':
+   - Speak warmly, compassionately, and naturally—like an attentive journal companion who truly knows and cares for the user.
+   - Ground your answer in their past memories when relevant (e.g. noticing their personal growth, validating their challenges, celebrating their milestones).
+   - STRICT PERSONA RULE: NEVER speak like a robot, database, or system logger! NEVER say "I have noted this in your journal", "I have updated my records", "Retrieved memory", or "According to my records". Speak directly, warmly, and humanly to them (e.g., "It is completely normal to feel scared before your first presentation...", "Congratulations on finishing your presentation! It takes genuine courage to step up...").
+
+2. 'action', 'new_memory', and 'supersede_id':
+   Analyze the user's message against the retrieved past memories:
+
+   A. ACTION "SUPERSEDE_OLD":
+      - MANDATORY EMOTIONAL PROGRESSION & RESOLUTION RULE: If the user describes having completed, overcome, resolved, or improved upon an issue, fear, anxiety, or challenge from a past memory (for example: they previously felt scared, nervous, or stressed about a presentation/interview/meeting/conflict, and they now share that they gave it, handled it, feel confident, or resolved it), you MUST choose the action "SUPERSEDE_OLD".
+      - 'supersede_id': MUST be the exact ID of the specific old past memory that is being overcome, contradicted, or resolved (e.g. from the [ID: ...] list above).
+      - 'new_memory':
+        * 'type': "event" | "feeling" | "belief" | "decision" | "preference"
+        * 'content': A clear, concise 1-sentence summary of the new state or milestone (e.g. "Completed first presentation and gained confidence for future talks"). 
+          STRICT RULE: DO NOT prepend "Feeling:", "Event:", "Preference:", or any type prefix to the content! DO NOT copy-paste raw typo-laden text.
+        * 'source_quote': exact verbatim quote from the user's message.
+        * 'is_temporary': boolean (true if temporary/transient).
+
+   B. ACTION "SAVE_NEW":
+      - TRIGGER: The user shares a new personal reflection, event, feeling, preference, belief, or decision that is new and does NOT contradict or resolve any past memory listed above.
+      - 'supersede_id': null
+      - 'new_memory': Same clean 1-sentence structure as above (no type prefixes, concise summary).
+
+   C. ACTION "NO_SAVE":
+      - TRIGGER: The message is primarily a question, inquiry, greeting, or transient remark that introduces no lasting personal updates.
+      - 'supersede_id': null
+      - 'new_memory': null
+
+Return ONLY a JSON object:
+{
+  "reply": "Empathetic, authentic companion response",
+  "action": "SAVE_NEW" | "SUPERSEDE_OLD" | "NO_SAVE",
+  "new_memory": { "type": "...", "content": "...", "source_quote": "...", "is_temporary": false } | null,
+  "supersede_id": "..." | null
+}`;
+
+  try {
+    const completion = await groqClient.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: text }
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.2,
+      max_tokens: 1024
+    });
+
+    let rawJson = completion.choices[0]?.message?.content || '{}';
+    rawJson = rawJson.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+    const parsed = JSON.parse(rawJson);
+    
+    // Normalize and validate action
+    let action = (parsed.action || 'NO_SAVE').toUpperCase();
+    if (!['SAVE_NEW', 'SUPERSEDE_OLD', 'NO_SAVE'].includes(action)) {
+      action = 'NO_SAVE';
+    }
+
+    // Defensive check for supersede_id
+    let supersedeId = parsed.supersede_id ? String(parsed.supersede_id).trim() : null;
+    if (action === 'SUPERSEDE_OLD') {
+      const existsInPast = pastMemories.some(m => m._id?.toString() === supersedeId);
+      if (!existsInPast) {
+        // If the LLM hallucinated an ID that wasn't in past memories, check if past memories has candidate
+        if (pastMemories.length > 0 && pastMemories[0]._id) {
+          supersedeId = pastMemories[0]._id.toString();
+        } else {
+          action = 'SAVE_NEW';
+          supersedeId = null;
+        }
+      }
+    } else {
+      supersedeId = null;
+    }
+
+    let newMemory = null;
+    if (action === 'SAVE_NEW' || action === 'SUPERSEDE_OLD') {
+      const rawMem = parsed.new_memory || {};
+      let quote = rawMem.source_quote || '';
+      if (!text.includes(quote)) {
+        const sentences = text.split(/(?<=[.?!])\s+/);
+        quote = sentences.find(s => text.includes(s)) || text.slice(0, 100);
+      }
+      
+      // Clean type prefixes like "Feeling: ", "Event: ", etc. from content
+      let cleanContent = String(rawMem.content || text.slice(0, 100))
+        .replace(/^(feeling|event|belief|decision|preference):\s*/i, '')
+        .trim();
+
+      newMemory = {
+        type: ['event', 'feeling', 'belief', 'decision', 'preference'].includes(rawMem.type?.toLowerCase())
+          ? rawMem.type.toLowerCase()
+          : 'feeling',
+        content: cleanContent || text.slice(0, 100),
+        source_quote: quote,
+        is_temporary: Boolean(rawMem.is_temporary)
+      };
+    }
+
+    return {
+      reply: parsed.reply || localFallbackAnswer(text, pastMemories),
+      action,
+      new_memory: newMemory,
+      supersede_id: supersedeId
+    };
+  } catch (err) {
+    console.warn(`[ECHO AI WARNING] Groq agentic evaluation failed (${err.message}). Using local fallback.`);
+    return localFallbackAgentic(text, pastMemories);
+  }
+}
+
+/**
+ * Smart local rule-based fallback for Agentic Memory evaluation
+ */
+function localFallbackAgentic(text, pastMemories = []) {
+  const lower = text.toLowerCase().trim();
+  const isQuestion = lower.endsWith('?') || 
+    lower.startsWith('how') || 
+    lower.startsWith('what') || 
+    lower.startsWith('why') || 
+    lower.startsWith('when') || 
+    lower.startsWith('do i') || 
+    lower.startsWith('am i') || 
+    lower.startsWith('tell me') ||
+    lower.startsWith('is there');
+
+  // 1. Question or query intent -> NO_SAVE
+  if (isQuestion) {
+    return {
+      reply: localFallbackAnswer(text, pastMemories),
+      action: 'NO_SAVE',
+      new_memory: null,
+      supersede_id: null
+    };
+  }
+
+  // 2. Emotional Resolution / Breakthrough / Correction -> SUPERSEDE_OLD
+  const isPresentationResolution = (lower.includes('confident') || lower.includes('gave') || lower.includes('finished') || lower.includes('handled') || lower.includes('did it') || lower.includes('went well')) &&
+    pastMemories.some(m => /presentation|scared|nervous|fear|stress|anxious/i.test(`${m.content} ${m.source_quote}`));
+
+  const isCorrection = isPresentationResolution ||
+    lower.includes('improved') || 
+    lower.includes('no longer') || 
+    lower.includes('not anymore') || 
+    lower.includes('resolved') || 
+    lower.includes('changed my mind') || 
+    lower.includes("don't feel that way") ||
+    lower.includes('we talked');
+
+  if (isCorrection && pastMemories.length > 0) {
+    // Find matching past memory (e.g. presentation anxiety)
+    const targetMemory = pastMemories.find(m => /presentation|scared|nervous|fear|stress|anxious/i.test(`${m.content} ${m.source_quote}`)) || pastMemories[0];
+    const targetId = targetMemory._id?.toString() || null;
+    const extracted = localFallbackExtract(text)[0];
+
+    let reply = `Congratulations on completing your presentation! Stepping up when you were previously feeling scared takes real courage, and it is wonderful to see your confidence grow for future talks.`;
+    if (lower.includes('improved') || lower.includes('talked')) {
+      reply = `I am so glad to hear that things have improved. Having open conversations and resolving emotional friction takes real strength.`;
+    }
+
+    return {
+      reply,
+      action: 'SUPERSEDE_OLD',
+      new_memory: extracted,
+      supersede_id: targetId
+    };
+  }
+
+  // 3. New statement / reflection -> SAVE_NEW
+  const extracted = localFallbackExtract(text)[0];
+  let reply = `It takes genuine honesty to acknowledge how you feel. Thank you for sharing this.`;
+  if (lower.includes('scared') || lower.includes('nervous')) {
+    reply = `It is completely natural to feel scared before your first presentation. Remember that nervousness just shows that you care—you have what it takes to get through this, and I'm rooting for you.`;
+  } else if (pastMemories.length > 0) {
+    reply = `Thank you for sharing this reflection. It's meaningful to see how your thoughts continue to grow alongside your earlier notes on ${pastMemories[0].content.toLowerCase()}.`;
+  }
+
+  return {
+    reply,
+    action: 'SAVE_NEW',
+    new_memory: extracted,
+    supersede_id: null
+  };
 }

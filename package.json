@@ -9,6 +9,7 @@
     "server:dev": "node --watch server/server.js",
     "seed": "node server/seed.js",
     "test:api": "node scripts/test_api.js",
+    "test:auto": "node scripts/test_auto_api.js",
     "dev:all": "node scripts/start-all.js",
     "build": "vite build",
     "lint": "oxlint",

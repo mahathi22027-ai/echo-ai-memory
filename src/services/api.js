@@ -105,11 +105,19 @@ export async function sendChatMessage({ message, mode = 'journal', userId = 'use
   // If Live mode or Auto mode is active, attempt live backend first:
   if (config.mode === 'live' || config.mode === 'auto') {
     try {
-      // Direct to /api/query if mode is 'query', or /api/chat with full payload
-      const endpoint = mode === 'query' ? `${config.baseUrl}/query` : `${config.baseUrl}/chat`;
-      const bodyPayload = mode === 'query' 
-        ? { query: message, message, mode, user_id: userId }
-        : { text: message, message, mode, user_id: userId };
+      // Direct to /api/auto if mode is 'auto', /api/query if 'query', or /api/chat
+      const endpoint = mode === 'auto'
+        ? `${config.baseUrl}/auto`
+        : mode === 'query'
+          ? `${config.baseUrl}/query`
+          : `${config.baseUrl}/chat`;
+      const bodyPayload = {
+        text: message,
+        query: message,
+        message,
+        mode,
+        user_id: userId
+      };
 
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -432,6 +440,172 @@ function mockSendChatMessage({ message, mode, userId }) {
     }
     return mem;
   });
+
+  // 0. AUTO AGENTIC MODE (Autonomous Recall, Save, or Supersede)
+  if (mode === 'auto') {
+    const eligibleMemories = memories.filter(m => 
+      m.user_id === userId &&
+      m.status === 'active' &&
+      !m.is_private &&
+      (!m.expires_at || new Date(m.expires_at) > now)
+    );
+    const privateMemories = memories.filter(m => m.user_id === userId && m.is_private);
+
+    const scored = eligibleMemories.map(mem => {
+      let score = 0;
+      const memTokens = `${mem.content} ${mem.type} ${mem.source_quote}`.toLowerCase().split(/\s+/);
+      const queryTokens = lowerMsg.split(/\s+/);
+      if (lowerMsg.includes('same way') || lowerMsg.includes('friends') || lowerMsg.includes('effort') || lowerMsg.includes('hurt')) {
+        if (mem.type === 'feeling' && (mem.content.includes('friend') || mem.content.includes('hurt'))) score += 0.89;
+      }
+      if (lowerMsg.includes('work') || lowerMsg.includes('cafe') || lowerMsg.includes('focus') || lowerMsg.includes('code')) {
+        if (mem.type === 'preference' || mem.content.includes('work')) score += 0.92;
+      }
+      if (lowerMsg.includes('routine') || lowerMsg.includes('habit') || lowerMsg.includes('morning')) {
+        if (mem.type === 'belief' || mem.content.includes('habit') || mem.content.includes('morning')) score += 0.94;
+      }
+      queryTokens.forEach(t => {
+        if (t.length > 3 && memTokens.some(mt => mt.includes(t) || t.includes(mt))) score += 0.25;
+      });
+      return { memory: mem, score: Math.min(Number(score.toFixed(2)), 0.98) };
+    });
+    const relevant = scored.filter(s => s.score >= 0.50).sort((a, b) => b.score - a.score);
+
+    const isQuestion = message.endsWith('?') || lowerMsg.startsWith('what') || lowerMsg.startsWith('why') || lowerMsg.startsWith('how') || lowerMsg.startsWith('do i') || lowerMsg.startsWith('tell me');
+    const isCorrection = lowerMsg.includes('things have improved') || lowerMsg.includes('don\'t feel that way') || lowerMsg.includes('we talked it out') || lowerMsg.includes('no longer') || lowerMsg.includes('changed my mind');
+
+    if (isQuestion) {
+      const topMem = relevant[0]?.memory;
+      const refIds = topMem ? [topMem._id] : [];
+      const similarityScores = topMem ? { [topMem._id]: relevant[0].score } : {};
+      const reply = topMem
+        ? `Recalling your previous reflection: "${topMem.source_quote}" (${topMem.content}). Does this connect with what you're asking?`
+        : `I searched your memories, but didn't find any past record directly matching this question.`;
+
+      events.unshift({
+        _id: `evt_${Date.now()}`,
+        user_id: userId,
+        memory_id: topMem ? topMem._id : 'none',
+        event_type: 'vector_recall',
+        timestamp: new Date().toISOString(),
+        metadata: { query_text: message.slice(0, 80), mode: 'auto', action: 'NO_SAVE' }
+      });
+      setStoredData(STORAGE_KEYS.EVENTS, events);
+
+      return {
+        success: true,
+        mode: 'auto',
+        reply,
+        answer: reply,
+        actionTaken: 'NO_SAVE',
+        referencedMemories: refIds,
+        memoriesUsed: refIds,
+        extractedMemories: [],
+        similarityScores,
+        privacyShieldedCount: privateMemories.length
+      };
+    } else if (isCorrection && relevant.length > 0) {
+      const targetOld = relevant[0].memory;
+      const oldId = targetOld._id;
+      const newId = `mem_${Date.now().toString().slice(-4)}`;
+
+      memories = memories.map(m => m._id === oldId ? { ...m, status: 'superseded' } : m);
+      const newMemory = {
+        _id: newId,
+        user_id: userId,
+        entry_id: `entry_${Date.now().toString().slice(-3)}`,
+        type: targetOld.type,
+        content: `Updated resolution: ${message.slice(0, 90)}`,
+        source_quote: message.slice(0, 80),
+        embedding: [0.2, 0.7, 0.4, 0.5, 0.9],
+        status: 'active',
+        is_private: false,
+        expires_at: null,
+        supersedes_id: oldId,
+        created_at: new Date().toISOString()
+      };
+      memories.unshift(newMemory);
+
+      events.unshift({
+        _id: `evt_${Date.now()}`,
+        user_id: userId,
+        memory_id: newId,
+        event_type: 'memory_superseded',
+        timestamp: new Date().toISOString(),
+        metadata: { mode: 'auto', action: 'SUPERSEDE_OLD', superseded_memory_id: oldId, new_memory_id: newId }
+      });
+      setStoredData(STORAGE_KEYS.MEMORIES, memories);
+      setStoredData(STORAGE_KEYS.EVENTS, events);
+
+      const reply = `I've updated your journal. Your previous reflection has been superseded with this update: "${message.slice(0, 60)}...".`;
+      return {
+        success: true,
+        mode: 'auto',
+        reply,
+        answer: reply,
+        actionTaken: 'SUPERSEDE_OLD',
+        referencedMemories: [oldId],
+        memoriesUsed: [oldId],
+        extractedMemories: [newMemory],
+        supersededMemoryId: oldId,
+        similarityScores: { [oldId]: relevant[0].score }
+      };
+    } else {
+      // SAVE_NEW
+      const newId = `mem_${Date.now().toString().slice(-4)}`;
+      let type = 'feeling';
+      if (lowerMsg.includes('work') || lowerMsg.includes('cafe')) type = 'preference';
+      else if (lowerMsg.includes('habit') || lowerMsg.includes('routine')) type = 'belief';
+      else if (lowerMsg.includes('goal') || lowerMsg.includes('decide')) type = 'decision';
+
+      const newMemory = {
+        _id: newId,
+        user_id: userId,
+        entry_id: `entry_${Date.now().toString().slice(-3)}`,
+        type,
+        content: `Observed ${type}: ${message.slice(0, 80)}`,
+        source_quote: message.slice(0, 80),
+        embedding: [0.1, 0.5, 0.3, 0.8, 0.2],
+        status: 'active',
+        is_private: false,
+        expires_at: null,
+        supersedes_id: null,
+        created_at: new Date().toISOString()
+      };
+      memories.unshift(newMemory);
+
+      events.unshift({
+        _id: `evt_${Date.now()}`,
+        user_id: userId,
+        memory_id: newId,
+        event_type: 'memory_created',
+        timestamp: new Date().toISOString(),
+        metadata: { mode: 'auto', action: 'SAVE_NEW', type }
+      });
+      setStoredData(STORAGE_KEYS.MEMORIES, memories);
+      setStoredData(STORAGE_KEYS.EVENTS, events);
+
+      const topMem = relevant[0]?.memory;
+      const refIds = topMem ? [topMem._id] : [];
+      const similarityScores = topMem ? { [topMem._id]: relevant[0].score } : {};
+      let reply = `I've noted this in your journal and extracted a new ${type} memory into your vault.`;
+      if (topMem) {
+        reply += ` This connects with your past note: "${topMem.content}".`;
+      }
+
+      return {
+        success: true,
+        mode: 'auto',
+        reply,
+        answer: reply,
+        actionTaken: 'SAVE_NEW',
+        referencedMemories: refIds,
+        memoriesUsed: refIds,
+        extractedMemories: [newMemory],
+        similarityScores
+      };
+    }
+  }
 
   // 1. RECALL / QUERY MODE: Vector Semantic Search & Context-Aware Response
   if (mode === 'query' || message.endsWith('?') || lowerMsg.startsWith('what') || lowerMsg.startsWith('why') || lowerMsg.startsWith('how') || lowerMsg.includes('remember') || lowerMsg.includes('recall')) {

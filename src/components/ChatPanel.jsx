@@ -82,6 +82,15 @@ export default function ChatPanel() {
         <div className="mode-toggle-group">
           <button 
             type="button"
+            className={`mode-btn ${selectedMode === 'auto' ? 'active-auto' : ''}`}
+            onClick={() => setSelectedMode('auto')}
+            title="Auto (Agentic) Mode: Autonomously recalls past memories, stores new facts, or supersedes old memories"
+          >
+            <Sparkles size={13} />
+            <span>Auto</span>
+          </button>
+          <button 
+            type="button"
             className={`mode-btn ${selectedMode === 'journal' ? 'active-journal' : ''}`}
             onClick={() => setSelectedMode('journal')}
             title="Journal Mode: Extracts structured memories and stores them in MongoDB"
@@ -106,6 +115,12 @@ export default function ChatPanel() {
         <span className="suggestions-label">Try:</span>
         <button 
           className="suggestion-chip"
+          onClick={() => handleSuggestionClick("I decided to try a new routine starting tomorrow, how does this compare to my past habits?", 'auto')}
+        >
+          "Auto: New routine..."
+        </button>
+        <button 
+          className="suggestion-chip"
           onClick={() => handleSuggestionClick("I feel like my friends don't value my efforts.", 'journal')}
         >
           "I feel like my friends..."
@@ -118,9 +133,9 @@ export default function ChatPanel() {
         </button>
         <button 
           className="suggestion-chip"
-          onClick={() => handleSuggestionClick("Things have improved; I don't feel that way now.", 'journal')}
+          onClick={() => handleSuggestionClick("Things have improved; I don't feel that way now.", 'auto')}
         >
-          "Things have improved..."
+          "Auto: Things have improved..."
         </button>
       </div>
 
@@ -150,8 +165,16 @@ export default function ChatPanel() {
                   <span className="message-sender-name">
                     {isEcho ? 'Echo' : 'You'}
                   </span>
-                  <span className="message-mode-badge">
-                    {msg.mode === 'query' ? 'Recall Query' : 'Journal Entry'}
+                  <span className={`message-mode-badge ${msg.mode === 'auto' ? 'badge-auto' : ''}`}>
+                    {msg.mode === 'auto'
+                      ? (msg.actionTaken === 'SAVE_NEW'
+                          ? 'Auto · Saved'
+                          : msg.actionTaken === 'SUPERSEDE_OLD'
+                            ? 'Auto · Superseded'
+                            : msg.actionTaken === 'NO_SAVE'
+                              ? 'Auto · Recalled'
+                              : 'Auto Agentic')
+                      : msg.mode === 'query' ? 'Recall Query' : 'Journal Entry'}
                   </span>
                   <span className="message-time">
                     {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -253,9 +276,11 @@ export default function ChatPanel() {
                   <span></span>
                 </div>
                 <span className="thinking-text">
-                  {selectedMode === 'journal' 
-                    ? 'Extracting structured memories & creating embeddings...' 
-                    : 'Running MongoDB Vector Search across eligible memories...'}
+                  {selectedMode === 'auto'
+                    ? 'Autonomous agent evaluating memories & determining action...'
+                    : selectedMode === 'journal' 
+                      ? 'Extracting structured memories & creating embeddings...' 
+                      : 'Running MongoDB Vector Search across eligible memories...'}
                 </span>
               </div>
             </div>
@@ -269,7 +294,12 @@ export default function ChatPanel() {
       <form className="chat-input-area" onSubmit={handleSubmit}>
         <div className="input-toolbar">
           <div className="current-mode-indicator">
-            {selectedMode === 'journal' ? (
+            {selectedMode === 'auto' ? (
+              <>
+                <Sparkles size={12} className="text-purple" />
+                <span>Auto Mode (Autonomous Recall, Save & Supersede)</span>
+              </>
+            ) : selectedMode === 'journal' ? (
               <>
                 <BookOpen size={12} className="text-emerald" />
                 <span>Journal Mode (Creates structured memory)</span>
@@ -289,9 +319,11 @@ export default function ChatPanel() {
             ref={textareaRef}
             className="chat-textarea"
             placeholder={
-              selectedMode === 'journal'
-                ? "Write your thoughts, feelings, decisions, or daily reflections..."
-                : "Ask Echo anything about your past entries or experiences..."
+              selectedMode === 'auto'
+                ? "Talk to Echo freely—Echo will recall past context and remember new updates automatically..."
+                : selectedMode === 'journal'
+                  ? "Write your thoughts, feelings, decisions, or daily reflections..."
+                  : "Ask Echo anything about your past entries or experiences..."
             }
             value={inputVal}
             onChange={(e) => setInputVal(e.target.value)}
