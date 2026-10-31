@@ -129,7 +129,7 @@ export default function App() {
   const [logOpen, setLogOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [backendUrl, setBackendUrl] = useState(() => localStorage.getItem(API_URL_KEY) || 'http://localhost:5000/api')
+  const [backendUrl, setBackendUrl] = useState(() => localStorage.getItem(API_URL_KEY) || import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000/api')
   const [backendConnected, setBackendConnected] = useState<boolean | null>(null)
   const [filterType, setFilterType] = useState<string>('all')
 
@@ -147,17 +147,10 @@ export default function App() {
   // Real backend-driven state
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
-      id: 'msg_welcome_1',
-      sender: 'user',
-      content: 'I took the long way through the park before work today. The air was cool, everything was quiet, and I felt much clearer by the time I opened my laptop. I keep wondering what it would feel like to stop filling every open space in my calendar.',
-      timestamp: 'Today, 9:42 AM',
-      mode: 'journal'
-    },
-    {
-      id: 'msg_welcome_2',
+      id: 'msg_welcome',
       sender: 'echo',
-      content: 'It sounds like the walk gave you something your schedule hasn’t lately: room to arrive before having to perform. There’s a gentle question underneath this entry—whether a slower rhythm might actually help you move with more intention.',
-      timestamp: 'Today, 9:42 AM',
+      content: "Hi, I'm Echo. Write what's on your mind and I'll remember what matters, or switch to Ask Echo to look back on something you've shared before.",
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       mode: 'journal'
     }
   ])
@@ -279,7 +272,7 @@ export default function App() {
       const echoMsg: ChatMessage = {
         id: `echo_${Date.now()}`,
         sender: 'echo',
-        content: data.reply || (requestMode === 'journal' ? 'Journal reflection ingested into memory vault.' : 'No recall found.'),
+        content: data.reply || (requestMode === 'journal' ? 'Got it.' : "I don't have anything about that yet."),
         mode: requestMode,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         referencedMemories: data.referencedMemories || []
@@ -304,7 +297,7 @@ export default function App() {
       const errorMsg: ChatMessage = {
         id: `echo_err_${Date.now()}`,
         sender: 'echo',
-        content: `Error connecting to ECHO backend at ${backendUrl}: ${err.message}. Please verify the backend server is running.`,
+        content: "Couldn't reach the server. It may be waking up. Try again in a few seconds.",
         mode: requestMode,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       }
@@ -437,12 +430,7 @@ export default function App() {
     return m.type?.toLowerCase() === filterType.toLowerCase()
   })
 
-  const history = [
-    { label: 'A quieter kind of progress', time: 'Today' },
-    { label: 'Sunday reset', time: 'Yesterday' },
-    { label: 'Friendship & reciprocity', time: 'Oct 28' },
-    { label: 'Career reflections', time: 'Oct 24' },
-  ]
+  const history: { label: string; time: string }[] = []
 
   if (!user) {
     return (
@@ -500,7 +488,7 @@ export default function App() {
               <button className="auth-submit" type="submit">{authMode === 'signin' ? 'Continue to Echo' : 'Create my space'}<Icon name="arrowUp" size={17} /></button>
             </form>
 
-            <p className="demo-notice"><Icon name="shield" size={13} /><span><strong>Agentic Memory Active</strong> Connected to MongoDB Atlas & Groq/OpenAI backend.</span></p>
+            <p className="demo-notice"><Icon name="shield" size={13} /><span><strong>Demo sign-in</strong> Your email keeps your memories separate. Passwords are not verified.</span></p>
           </div>
         </section>
       </main>
@@ -510,7 +498,7 @@ export default function App() {
   return (
     <div className="app-shell">
       {navOpen && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setNavOpen(false)} />}
-      
+
       {/* Sidebar */}
       <aside className={`sidebar ${navOpen ? 'is-open' : ''}`}>
         <div className="brand-row">
@@ -540,12 +528,16 @@ export default function App() {
         <div className="history">
           <div className="section-label"><span>Journal history</span><button aria-label="More history options"><Icon name="more" size={17} /></button></div>
           <div className="history-list">
-            {history.map((item, index) => (
-              <button key={item.label} className={`history-item ${index === 0 ? 'active' : ''}`}>
-                <span>{item.label}</span>
-                <small>{item.time}</small>
-              </button>
-            ))}
+            {history.length === 0 ? (
+              <p style={{ padding: '8px 12px', fontSize: '12px', color: 'var(--subtle)' }}>Your past sessions will appear here.</p>
+            ) : (
+              history.map((item, index) => (
+                <button key={item.label} className={`history-item ${index === 0 ? 'active' : ''}`}>
+                  <span>{item.label}</span>
+                  <small>{item.time}</small>
+                </button>
+              ))
+            )}
           </div>
         </div>
 
@@ -553,7 +545,7 @@ export default function App() {
           <div className="profile-wrap">
             <button className="profile-button" onClick={() => setProfileOpen(!profileOpen)} aria-expanded={profileOpen}>
               <span className="avatar">{initials(user.name)}</span>
-              <span className="profile-copy"><strong>{user.name}</strong><small>{activeUserId}</small></span>
+              <span className="profile-copy"><strong>{user.name}</strong><small>{user.email}</small></span>
               <Icon name="more" size={17} />
             </button>
             {profileOpen && (
@@ -578,7 +570,7 @@ export default function App() {
         <header className="topbar">
           <button className="icon-button nav-trigger" onClick={() => setNavOpen(true)} aria-label="Open navigation"><Icon name="menu" /></button>
           <button className="conversation-title">
-            <span>A quieter kind of progress</span>
+            <span>New journal</span>
             <Icon name="chevron" size={16} />
           </button>
           <div className="topbar-actions">
@@ -654,7 +646,7 @@ export default function App() {
                   <div className="message-content" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span className="status-dot" style={{ animation: 'pulse 1s infinite' }} />
                     <span style={{ fontStyle: 'italic', color: 'var(--muted)' }}>
-                      {mode === 'Journal Entry' ? 'Analyzing reflection & ingesting agentic memories into MongoDB Atlas...' : 'Running semantic recall with vector similarity search...'}
+                      {mode === 'Journal Entry' ? 'Reading your entry and saving what matters...' : 'Looking through your memories...'}
                     </span>
                   </div>
                 </div>
@@ -709,7 +701,7 @@ export default function App() {
                   submitMessage(event)
                 }
               }}
-              placeholder={mode === 'Journal Entry' ? 'Write a reflection (ECHO will extract structured memories into MongoDB)...' : 'Ask Echo about your past memories, recurring feelings, and patterns...'}
+              placeholder={mode === 'Journal Entry' ? "Write what's on your mind..." : 'Ask Echo about something you shared before...'}
             />
             <div className="composer-controls">
               <div className="composer-left">
@@ -728,7 +720,7 @@ export default function App() {
               </button>
             </div>
           </form>
-          <p className="privacy-note"><Icon name="shield" size={13} />Agentic Memory · MongoDB Atlas · Groq Llama 3.3 · OpenAI Embeddings</p>
+          <p className="privacy-note"><Icon name="shield" size={13} />Memory stored in MongoDB Atlas · Groq Llama 3.3 · Gemini embeddings</p>
         </div>
       </main>
 
@@ -851,7 +843,7 @@ export default function App() {
 
         <div className="privacy-card">
           <Icon name="shield" size={18} />
-          <div><strong>Differential Privacy Shield</strong><p>Memories marked private are masked from query responses during vector recall.</p></div>
+          <div><strong>Privacy shield</strong><p>Private memories are left out of search and never shown to the AI.</p></div>
         </div>
       </aside>
 
