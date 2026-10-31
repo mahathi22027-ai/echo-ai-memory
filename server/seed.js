@@ -1,7 +1,7 @@
 /**
  * Database Seed Script for ECHO
  * Injects 3 dummy memories (one active, one superseded, one private)
- * with 1536-dimensional embeddings and audit logs so the UI has rich data immediately.
+ * with 768-dimensional embeddings and audit logs so the UI has rich data immediately.
  */
 
 import { connectDB, getDB, ObjectId } from './db.js';

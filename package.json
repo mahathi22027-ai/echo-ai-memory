@@ -4,17 +4,21 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "npm --prefix frontend run dev",
     "server": "node server/server.js",
     "server:dev": "node --watch server/server.js",
     "seed": "node server/seed.js",
     "test:api": "node scripts/test_api.js",
+    "test:auto": "node scripts/test_auto_api.js",
     "dev:all": "node scripts/start-all.js",
-    "build": "vite build",
-    "lint": "oxlint src",
-    "preview": "vite preview"
+    "build": "npm --prefix frontend run build",
+    "lint": "oxlint",
+    "preview": "npm --prefix frontend run preview",
+    "dev:root": "vite",
+    "build:root": "vite build"
   },
   "dependencies": {
+    "@google/genai": "^2.32.0",
     "cors": "^2.8.6",
     "dotenv": "^18.0.9",
     "express": "^5.3.0",

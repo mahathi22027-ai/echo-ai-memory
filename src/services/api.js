@@ -23,7 +23,7 @@ const STORAGE_KEYS = {
 const DEFAULT_CONFIG = {
   baseUrl: 'http://localhost:5000/api',
   mode: 'auto', // 'auto' | 'live' | 'mock'
-  timeoutMs: 3000
+  timeoutMs: 8000 // Raised from 3000ms to 8000ms to prevent premature fallback to local storage
 };
 
 // Load saved config or default
@@ -105,13 +105,27 @@ export async function sendChatMessage({ message, mode = 'journal', userId = 'use
   // If Live mode requested or Auto mode detects backend:
   if (config.mode === 'live') {
     try {
-      const res = await fetch(`${config.baseUrl}/chat`, {
+// Direct to /api/auto if mode is 'auto', /api/query if 'query', or /api/chat
+      const endpoint = mode === 'auto'
+        ? `${config.baseUrl}/auto`
+        : mode === 'query'
+          ? `${config.baseUrl}/query`
+          : `${config.baseUrl}/chat`;
+      const bodyPayload = {
+        text: message,
+        query: message,
+        message,
+        mode,
+        user_id: userId
+      };
+
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-user-id': userId
         },
-        body: JSON.stringify({ message, mode, user_id: userId })
+        body: JSON.stringify(bodyPayload)
       });
       if (!res.ok) throw new Error(`Server returned ${res.status}`);
       return await res.json();
@@ -452,6 +466,172 @@ function mockSendChatMessage({ message, mode, userId }) {
     return mem;
   });
 
+  // 0. AUTO AGENTIC MODE (Autonomous Recall, Save, or Supersede)
+  if (mode === 'auto') {
+    const eligibleMemories = memories.filter(m => 
+      m.user_id === userId &&
+      m.status === 'active' &&
+      !m.is_private &&
+      (!m.expires_at || new Date(m.expires_at) > now)
+    );
+    const privateMemories = memories.filter(m => m.user_id === userId && m.is_private);
+
+    const scored = eligibleMemories.map(mem => {
+      let score = 0;
+      const memTokens = `${mem.content} ${mem.type} ${mem.source_quote}`.toLowerCase().split(/\s+/);
+      const queryTokens = lowerMsg.split(/\s+/);
+      if (lowerMsg.includes('same way') || lowerMsg.includes('friends') || lowerMsg.includes('effort') || lowerMsg.includes('hurt')) {
+        if (mem.type === 'feeling' && (mem.content.includes('friend') || mem.content.includes('hurt'))) score += 0.89;
+      }
+      if (lowerMsg.includes('work') || lowerMsg.includes('cafe') || lowerMsg.includes('focus') || lowerMsg.includes('code')) {
+        if (mem.type === 'preference' || mem.content.includes('work')) score += 0.92;
+      }
+      if (lowerMsg.includes('routine') || lowerMsg.includes('habit') || lowerMsg.includes('morning')) {
+        if (mem.type === 'belief' || mem.content.includes('habit') || mem.content.includes('morning')) score += 0.94;
+      }
+      queryTokens.forEach(t => {
+        if (t.length > 3 && memTokens.some(mt => mt.includes(t) || t.includes(mt))) score += 0.25;
+      });
+      return { memory: mem, score: Math.min(Number(score.toFixed(2)), 0.98) };
+    });
+    const relevant = scored.filter(s => s.score >= 0.50).sort((a, b) => b.score - a.score);
+
+    const isQuestion = message.endsWith('?') || lowerMsg.startsWith('what') || lowerMsg.startsWith('why') || lowerMsg.startsWith('how') || lowerMsg.startsWith('do i') || lowerMsg.startsWith('tell me');
+    const isCorrection = lowerMsg.includes('things have improved') || lowerMsg.includes('don\'t feel that way') || lowerMsg.includes('we talked it out') || lowerMsg.includes('no longer') || lowerMsg.includes('changed my mind');
+
+    if (isQuestion) {
+      const topMem = relevant[0]?.memory;
+      const refIds = topMem ? [topMem._id] : [];
+      const similarityScores = topMem ? { [topMem._id]: relevant[0].score } : {};
+      const reply = topMem
+        ? `Recalling your previous reflection: "${topMem.source_quote}" (${topMem.content}). Does this connect with what you're asking?`
+        : `I searched your memories, but didn't find any past record directly matching this question.`;
+
+      events.unshift({
+        _id: `evt_${Date.now()}`,
+        user_id: userId,
+        memory_id: topMem ? topMem._id : 'none',
+        event_type: 'vector_recall',
+        timestamp: new Date().toISOString(),
+        metadata: { query_text: message.slice(0, 80), mode: 'auto', action: 'NO_SAVE' }
+      });
+      setStoredData(STORAGE_KEYS.EVENTS, events);
+
+      return {
+        success: true,
+        mode: 'auto',
+        reply,
+        answer: reply,
+        actionTaken: 'NO_SAVE',
+        referencedMemories: refIds,
+        memoriesUsed: refIds,
+        extractedMemories: [],
+        similarityScores,
+        privacyShieldedCount: privateMemories.length
+      };
+    } else if (isCorrection && relevant.length > 0) {
+      const targetOld = relevant[0].memory;
+      const oldId = targetOld._id;
+      const newId = `mem_${Date.now().toString().slice(-4)}`;
+
+      memories = memories.map(m => m._id === oldId ? { ...m, status: 'superseded' } : m);
+      const newMemory = {
+        _id: newId,
+        user_id: userId,
+        entry_id: `entry_${Date.now().toString().slice(-3)}`,
+        type: targetOld.type,
+        content: `Updated resolution: ${message.slice(0, 90)}`,
+        source_quote: message.slice(0, 80),
+        embedding: [0.2, 0.7, 0.4, 0.5, 0.9],
+        status: 'active',
+        is_private: false,
+        expires_at: null,
+        supersedes_id: oldId,
+        created_at: new Date().toISOString()
+      };
+      memories.unshift(newMemory);
+
+      events.unshift({
+        _id: `evt_${Date.now()}`,
+        user_id: userId,
+        memory_id: newId,
+        event_type: 'memory_superseded',
+        timestamp: new Date().toISOString(),
+        metadata: { mode: 'auto', action: 'SUPERSEDE_OLD', superseded_memory_id: oldId, new_memory_id: newId }
+      });
+      setStoredData(STORAGE_KEYS.MEMORIES, memories);
+      setStoredData(STORAGE_KEYS.EVENTS, events);
+
+      const reply = `I've updated your journal. Your previous reflection has been superseded with this update: "${message.slice(0, 60)}...".`;
+      return {
+        success: true,
+        mode: 'auto',
+        reply,
+        answer: reply,
+        actionTaken: 'SUPERSEDE_OLD',
+        referencedMemories: [oldId],
+        memoriesUsed: [oldId],
+        extractedMemories: [newMemory],
+        supersededMemoryId: oldId,
+        similarityScores: { [oldId]: relevant[0].score }
+      };
+    } else {
+      // SAVE_NEW
+      const newId = `mem_${Date.now().toString().slice(-4)}`;
+      let type = 'feeling';
+      if (lowerMsg.includes('work') || lowerMsg.includes('cafe')) type = 'preference';
+      else if (lowerMsg.includes('habit') || lowerMsg.includes('routine')) type = 'belief';
+      else if (lowerMsg.includes('goal') || lowerMsg.includes('decide')) type = 'decision';
+
+      const newMemory = {
+        _id: newId,
+        user_id: userId,
+        entry_id: `entry_${Date.now().toString().slice(-3)}`,
+        type,
+        content: `Observed ${type}: ${message.slice(0, 80)}`,
+        source_quote: message.slice(0, 80),
+        embedding: [0.1, 0.5, 0.3, 0.8, 0.2],
+        status: 'active',
+        is_private: false,
+        expires_at: null,
+        supersedes_id: null,
+        created_at: new Date().toISOString()
+      };
+      memories.unshift(newMemory);
+
+      events.unshift({
+        _id: `evt_${Date.now()}`,
+        user_id: userId,
+        memory_id: newId,
+        event_type: 'memory_created',
+        timestamp: new Date().toISOString(),
+        metadata: { mode: 'auto', action: 'SAVE_NEW', type }
+      });
+      setStoredData(STORAGE_KEYS.MEMORIES, memories);
+      setStoredData(STORAGE_KEYS.EVENTS, events);
+
+      const topMem = relevant[0]?.memory;
+      const refIds = topMem ? [topMem._id] : [];
+      const similarityScores = topMem ? { [topMem._id]: relevant[0].score } : {};
+      let reply = `I've noted this in your journal and extracted a new ${type} memory into your vault.`;
+      if (topMem) {
+        reply += ` This connects with your past note: "${topMem.content}".`;
+      }
+
+      return {
+        success: true,
+        mode: 'auto',
+        reply,
+        answer: reply,
+        actionTaken: 'SAVE_NEW',
+        referencedMemories: refIds,
+        memoriesUsed: refIds,
+        extractedMemories: [newMemory],
+        similarityScores
+      };
+    }
+  }
+
   // 1. RECALL / QUERY MODE: Vector Semantic Search & Context-Aware Response
   if (mode === 'query' || message.endsWith('?') || lowerMsg.startsWith('what') || lowerMsg.startsWith('why') || lowerMsg.startsWith('how') || lowerMsg.includes('remember') || lowerMsg.includes('recall')) {
     // Retrieval Pipeline (Page 7 B):
@@ -649,7 +829,7 @@ function mockSendChatMessage({ message, mode, userId }) {
     extractedContent = 'Set milestone for tangible deliverable within specified timeframe.';
   } else {
     extractedType = 'event';
-    extractedContent = 'Logged notable milestone and experiential context.';
+    extractedContent = message.trim().replace(/[.?!]+$/, '').slice(0, 80) || 'Personal milestone reflection';
   }
 
   // Quote extraction - must be verifiable exact substring (Page 3 acceptance check)
@@ -693,10 +873,21 @@ function mockSendChatMessage({ message, mode, userId }) {
   setStoredData(STORAGE_KEYS.MEMORIES, memories);
   setStoredData(STORAGE_KEYS.EVENTS, events);
 
+  let warmReply = "Thank you for sharing this reflection. Writing your thoughts down is such a grounding practice.";
+  if (lowerMsg.includes('trip') || lowerMsg.includes('travel') || lowerMsg.includes('vacation')) {
+    warmReply = "A trip sounds so refreshing! Getting away from your everyday routine is such a great way to recharge. Where did you go, and what was the highlight?";
+  } else if (lowerMsg.includes('nervous') || lowerMsg.includes('presentation') || lowerMsg.includes('scared')) {
+    warmReply = "It's completely natural to feel nervous. Give yourself credit for stepping up—you've got what it takes, and I'm cheering you on!";
+  } else if (extractedType === 'feeling') {
+    warmReply = "I hear you, and validating how you feel is such an important step. How has this been affecting your day?";
+  } else if (extractedType === 'decision') {
+    warmReply = "That sounds like a meaningful commitment to yourself. How are you feeling about taking this step forward?";
+  }
+
   return {
     success: true,
     mode: 'journal',
-    reply: `I've ingested your reflection and extracted a structured ${extractedType.toUpperCase()} memory. It's now indexed in MongoDB Atlas and available for contextual recall in future sessions.`,
+    reply: warmReply,
     extractedMemories: [newMemory],
     auditEvent: events[0]
   };

@@ -1274,6 +1274,13 @@ html, body {
   box-shadow: var(--shadow-sm);
 }
 
+.mode-btn.active-auto {
+  background: linear-gradient(135deg, #7C3AED, #6366F1);
+  color: #FFFFFF;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.25);
+}
+
 .chat-suggestions-bar {
   display: flex;
   align-items: center;
@@ -1388,6 +1395,13 @@ html, body {
   border-radius: var(--radius-full);
   background: var(--bg-surface-elevated);
   color: var(--text-muted);
+}
+
+.message-mode-badge.badge-auto {
+  background: rgba(124, 58, 237, 0.12);
+  color: #7C3AED;
+  border-color: rgba(124, 58, 237, 0.3);
+  font-weight: 600;
 }
 
 .message-time {
