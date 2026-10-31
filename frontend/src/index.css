@@ -47,15 +47,36 @@
     scrollbar-color: var(--border) transparent;
   }
 
+  html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
   body {
     min-width: 320px;
-    min-height: 100vh;
-    overflow: hidden;
     background: var(--bg);
     color: var(--text);
     font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
     font-size: 14px;
     -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  /* Custom visible webkit scrollbars for Chrome / Edge / Safari */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--border) 80%, transparent);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--muted);
   }
 
   button, textarea, input {
@@ -306,9 +327,11 @@
 .nav-action kbd { color: var(--subtle); font-size: 10px; font-family: inherit; }
 
 .history {
-  flex: 1;
+  flex: 1 1 0%;
   min-height: 0;
-  margin-top: 25px;
+  margin-top: 18px;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 .section-label {
@@ -345,10 +368,13 @@
 
 .sidebar-footer {
   position: relative;
+  margin-top: auto;
+  flex-shrink: 0;
   display: grid;
   gap: 5px;
   padding-top: 10px;
   border-top: 1px solid var(--border-soft);
+  background: var(--sidebar);
 }
 
 .profile-wrap { position: relative; min-width: 0; }
@@ -366,13 +392,18 @@
 .avatar {
   display: grid;
   place-items: center;
-  width: 31px;
-  height: 31px;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  flex-shrink: 0;
   border-radius: 50%;
   background: #dbe8e4;
   color: #28695f;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
+  line-height: 1;
+  user-select: none;
 }
 
 .profile-copy { min-width: 0; }
@@ -452,7 +483,10 @@
 .conversation-scroll {
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   scroll-behavior: smooth;
+  height: 100%;
+  overscroll-behavior-y: contain;
 }
 
 .message-stream {

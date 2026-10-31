@@ -169,6 +169,7 @@ export default function App() {
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const profileMenuRef = useRef<HTMLDivElement>(null)
 
   const activeUserId = user?.userId || (user ? `user_${user.email.replace(/[^a-zA-Z0-9]/g, '_')}` : 'demo_user')
   const authToken = localStorage.getItem(tokenKey) || ''
@@ -177,6 +178,21 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark)
   }, [dark])
+  // Close profile popup when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
+        setProfileOpen(false)
+      }
+    }
+    if (profileOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [profileOpen])
+
 
   // Check backend health & fetch initial memories
   useEffect(() => {
@@ -591,7 +607,7 @@ export default function App() {
         </div>
 
         <div className="sidebar-footer">
-          <div className="profile-wrap">
+          <div className="profile-wrap" ref={profileMenuRef}>
             <button className="profile-button" onClick={() => setProfileOpen(!profileOpen)} aria-expanded={profileOpen}>
               <span className="avatar">{initials(user.name)}</span>
               <span className="profile-copy"><strong>{user.name}</strong><small>{activeUserId}</small></span>
