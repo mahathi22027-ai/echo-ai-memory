@@ -244,15 +244,15 @@ async function retrieveRelevantMemories(db, userId, queryText, queryEmbedding = 
     ];
 
     const results = await db.collection('memories').aggregate(pipeline).toArray();
-    // Strict Grounding Gate: score >= 0.70
-    const qualified = (results || []).filter(doc => (doc.score || 0) >= 0.70);
+    // Calibrated Grounding Gate for Gemini 768-dim embeddings: score >= 0.58
+    const qualified = (results || []).filter(doc => (doc.score || 0) >= 0.58);
     if (qualified.length > 0) {
       retrievedMemories = qualified;
       usedNativeVectorSearch = true;
       qualified.forEach(doc => {
         similarityScores[doc._id.toString()] = Number((doc.score || 0.85).toFixed(2));
       });
-      console.log(`[Vector Search] Native Atlas $vectorSearch matched ${qualified.length} grounded memories (score >= 0.70).`);
+      console.log(`[Vector Search] Native Atlas $vectorSearch matched ${qualified.length} grounded memories (score >= 0.58).`);
     }
   } catch (vectorErr) {
     try {
@@ -286,22 +286,22 @@ async function retrieveRelevantMemories(db, userId, queryText, queryEmbedding = 
         }
       ];
       const results = await db.collection('memories').aggregate(fallbackPipeline).toArray();
-      // Strict Grounding Gate: score >= 0.70
-      const qualified = (results || []).filter(doc => (doc.score || 0) >= 0.70);
+      // Calibrated Grounding Gate for Gemini 768-dim embeddings: score >= 0.58
+      const qualified = (results || []).filter(doc => (doc.score || 0) >= 0.58);
       if (qualified.length > 0) {
         retrievedMemories = qualified;
         usedNativeVectorSearch = true;
         qualified.forEach(doc => {
           similarityScores[doc._id.toString()] = Number((doc.score || 0.85).toFixed(2));
         });
-        console.log(`[Vector Search] Native Atlas $vectorSearch (post-filter) matched ${qualified.length} grounded memories (score >= 0.70).`);
+        console.log(`[Vector Search] Native Atlas $vectorSearch (post-filter) matched ${qualified.length} grounded memories (score >= 0.58).`);
       }
     } catch (secondErr) {
       console.warn(`[Vector Search Notice] Native Atlas $vectorSearch stage not active (${secondErr.message}). Using in-memory cosine fallback over eligible documents.`);
     }
   }
 
-  // 2. In-Memory Cosine Fallback with Strict Grounding Gate (score >= 0.72)
+  // 2. In-Memory Cosine Fallback with Calibrated Grounding Gate (score >= 0.58)
   if (!usedNativeVectorSearch) {
     const eligibleDocs = await db.collection('memories').find(vectorFilter).toArray();
 
@@ -312,14 +312,14 @@ async function retrieveRelevantMemories(db, userId, queryText, queryEmbedding = 
 
     scored.sort((a, b) => b.score - a.score);
 
-    // Strict Grounding Gate: score >= 0.72
-    const topMatches = scored.filter(s => s.score >= 0.72).slice(0, 3);
+    // Calibrated Grounding Gate: score >= 0.58 (filters out noise < 0.50 while preserving real semantic matches)
+    const topMatches = scored.filter(s => s.score >= 0.58).slice(0, 3);
     retrievedMemories = topMatches.map(s => {
       const serialized = serializeDoc(s.doc);
       similarityScores[serialized._id] = Number(s.score.toFixed(2));
       return serialized;
     });
-    console.log(`[Cosine Fallback] Scored ${eligibleDocs.length} eligible documents. Matched ${retrievedMemories.length} grounded memories (score >= 0.72).`);
+    console.log(`[Cosine Fallback] Scored ${eligibleDocs.length} eligible documents. Matched ${retrievedMemories.length} grounded memories (score >= 0.58).`);
   }
 
   // 3. Count private memories for privacy shield
