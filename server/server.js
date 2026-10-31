@@ -11,6 +11,8 @@
  */
 
 import express from 'express';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { connectDB, getDB, ObjectId, getIsConnected } from './db.js';
@@ -38,7 +40,22 @@ app.use(cors({
 app.use(express.json());
 
 // Helper to extract authenticated or default user ID
+const JWT_SECRET = process.env.JWT_SECRET || 'echo_agentic_memory_secret_key_2026';
+
+// Helper to extract authenticated or default user ID (supports Bearer JWT token or x-user-id header)
 function getUserId(req) {
+  const authHeader = req.headers['authorization'];
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const token = authHeader.split(' ')[1];
+      const decoded = jwt.verify(token, JWT_SECRET);
+      if (decoded && decoded.userId) {
+        return decoded.userId;
+      }
+    } catch (e) {
+      // invalid or expired token, fall back
+    }
+  }
   return req.headers['x-user-id'] || req.body?.user_id || req.query?.user_id || 'demo_user';
 }
 
@@ -51,6 +68,129 @@ function serializeDoc(doc) {
   }
   return serialized;
 }
+
+// ==========================================
+// 0. AUTHENTICATION ENDPOINTS (MongoDB Native + JWT)
+// ==========================================
+
+// POST /api/auth/signup - Register new user in MongoDB Atlas
+app.post('/api/auth/signup', async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    if (!email || !password || !name) {
+      return res.status(400).json({ success: false, error: 'Name, email, and password are required' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail.includes('@') || password.length < 6) {
+      return res.status(400).json({ success: false, error: 'Invalid email or password (min 6 characters)' });
+    }
+
+    const db = getDB();
+    const existing = await db.collection('users').findOne({ email: cleanEmail });
+    if (existing) {
+      return res.status(409).json({ success: false, error: 'An account with this email already exists' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(password, salt);
+    const userId = 'usr_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
+
+    const newUser = {
+      userId,
+      name: name.trim(),
+      email: cleanEmail,
+      passwordHash,
+      created_at: new Date()
+    };
+
+    await db.collection('users').insertOne(newUser);
+    const token = jwt.sign({ userId, email: cleanEmail, name: newUser.name }, JWT_SECRET, { expiresIn: '7d' });
+
+    console.log(`[Auth] User registered successfully: ${cleanEmail} (${userId})`);
+
+    return res.status(201).json({
+      success: true,
+      token,
+      user: {
+        userId,
+        name: newUser.name,
+        email: cleanEmail
+      }
+    });
+  } catch (err) {
+    console.error('[POST /api/auth/signup Error]:', err);
+    return res.status(500).json({ success: false, error: 'Registration failed: ' + err.message });
+  }
+});
+
+// POST /api/auth/signin - Authenticate user credentials & return JWT
+app.post('/api/auth/signin', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ success: false, error: 'Email and password are required' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const db = getDB();
+    const user = await db.collection('users').findOne({ email: cleanEmail });
+
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Invalid email or password' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, error: 'Invalid email or password' });
+    }
+
+    const token = jwt.sign({ userId: user.userId, email: user.email, name: user.name }, JWT_SECRET, { expiresIn: '7d' });
+
+    console.log(`[Auth] User signed in successfully: ${cleanEmail} (${user.userId})`);
+
+    return res.status(200).json({
+      success: true,
+      token,
+      user: {
+        userId: user.userId,
+        name: user.name,
+        email: user.email
+      }
+    });
+  } catch (err) {
+    console.error('[POST /api/auth/signin Error]:', err);
+    return res.status(500).json({ success: false, error: 'Login failed: ' + err.message });
+  }
+});
+
+// GET /api/auth/me - Verify JWT token and fetch current profile
+app.get('/api/auth/me', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId || userId === 'demo_user') {
+      return res.status(401).json({ success: false, error: 'Not authenticated' });
+    }
+
+    const db = getDB();
+    const user = await db.collection('users').findOne({ userId });
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      user: {
+        userId: user.userId,
+        name: user.name,
+        email: user.email,
+        created_at: user.created_at
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: 'Authentication check failed: ' + err.message });
+  }
+});
 
 // ==========================================
 // 1. POST /api/chat - Ingestion & Extraction (or Recall query)

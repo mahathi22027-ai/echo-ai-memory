@@ -93,11 +93,13 @@ export interface MemoryEvent {
 }
 
 type AuthUser = {
+  userId?: string
   name: string
   email: string
 }
 
 const sessionKey = 'echo-demo-session'
+const tokenKey = 'echo-jwt-token'
 const profileKey = 'echo-demo-profile'
 const API_URL_KEY = 'echo_backend_api_url'
 
@@ -168,7 +170,8 @@ export default function App() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  const activeUserId = user ? `user_${user.email.replace(/[^a-zA-Z0-9]/g, '_')}` : 'demo_user'
+  const activeUserId = user?.userId || (user ? `user_${user.email.replace(/[^a-zA-Z0-9]/g, '_')}` : 'demo_user')
+  const authToken = localStorage.getItem(tokenKey) || ''
 
   // Sync theme
   useEffect(() => {
@@ -203,7 +206,7 @@ export default function App() {
   async function fetchMemories() {
     try {
       const res = await fetch(`${backendUrl}/memories`, {
-        headers: { 'x-user-id': activeUserId }
+        headers: { 'x-user-id': activeUserId, ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) }
       })
       if (res.ok) {
         const data = await res.json()
@@ -222,7 +225,7 @@ export default function App() {
   async function fetchEvents() {
     try {
       const res = await fetch(`${backendUrl}/memory-events`, {
-        headers: { 'x-user-id': activeUserId }
+        headers: { 'x-user-id': activeUserId, ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) }
       })
       if (res.ok) {
         const data = await res.json()
@@ -262,7 +265,8 @@ export default function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': activeUserId
+          'x-user-id': activeUserId,
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
         },
         body: JSON.stringify({
           message: userText,
@@ -320,7 +324,8 @@ export default function App() {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': activeUserId
+          'x-user-id': activeUserId,
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
         },
         body: JSON.stringify({ is_private: !memory.is_private })
       })
@@ -338,7 +343,7 @@ export default function App() {
     try {
       const res = await fetch(`${backendUrl}/memories/${memoryId}`, {
         method: 'DELETE',
-        headers: { 'x-user-id': activeUserId }
+        headers: { 'x-user-id': activeUserId, ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) }
       })
       if (res.ok) {
         await fetchMemories()
@@ -367,7 +372,8 @@ export default function App() {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': activeUserId
+          'x-user-id': activeUserId,
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
         },
         body: JSON.stringify({
           supersedeWith: {
@@ -387,7 +393,7 @@ export default function App() {
     }
   }
 
-  function submitAuth(event: FormEvent<HTMLFormElement>) {
+  async function submitAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setAuthError('')
 
@@ -409,20 +415,43 @@ export default function App() {
       return
     }
 
-    const storedProfile = readStoredUser(profileKey)
-    const nextUser = authMode === 'signup'
-      ? { name, email }
-      : storedProfile?.email === email
-        ? storedProfile
-        : { name: email.split('@')[0].replace(/[._-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()), email }
+    try {
+      const endpoint = authMode === 'signup' ? '/auth/signup' : '/auth/signin'
+      const payload = authMode === 'signup' ? { name, email, password } : { email, password }
 
-    localStorage.setItem(sessionKey, JSON.stringify(nextUser))
-    localStorage.setItem(profileKey, JSON.stringify(nextUser))
-    setUser(nextUser)
+      const res = await fetch(`${backendUrl}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+
+      const result = await res.json()
+      if (!res.ok || !result.success) {
+        setAuthError(result.error || 'Authentication failed. Please check your credentials.')
+        return
+      }
+
+      if (result.token) {
+        localStorage.setItem(tokenKey, result.token)
+      }
+
+      const verifiedUser: AuthUser = {
+        userId: result.user?.userId,
+        name: result.user?.name || name || 'Echo User',
+        email: result.user?.email || email
+      }
+
+      localStorage.setItem(sessionKey, JSON.stringify(verifiedUser))
+      localStorage.setItem(profileKey, JSON.stringify(verifiedUser))
+      setUser(verifiedUser)
+    } catch (err: any) {
+      setAuthError('Could not reach backend authentication server: ' + err.message)
+    }
   }
 
   function logout() {
     localStorage.removeItem(sessionKey)
+    localStorage.removeItem(tokenKey)
     setProfileOpen(false)
     setNavOpen(false)
     setUser(null)
@@ -500,7 +529,7 @@ export default function App() {
               <button className="auth-submit" type="submit">{authMode === 'signin' ? 'Continue to Echo' : 'Create my space'}<Icon name="arrowUp" size={17} /></button>
             </form>
 
-            <p className="demo-notice"><Icon name="shield" size={13} /><span><strong>Agentic Memory Active</strong> Connected to MongoDB Atlas & Groq/OpenAI backend.</span></p>
+            <p className="demo-notice"><Icon name="shield" size={13} /><span><strong>Secure Cloud Authentication</strong> Stored and verified in MongoDB Atlas with bcrypt password hashing and JWT sessions.</span></p>
           </div>
         </section>
       </main>
