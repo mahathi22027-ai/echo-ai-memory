@@ -86,54 +86,61 @@ app.post('/api/chat', async (req, res) => {
     const entryResult = await db.collection('journal_entries').insertOne(journalEntry);
     const entryId = entryResult.insertedId.toString();
 
-    // 2. Extract structured memories via Groq LLM (llama-3.3-70b-versatile)
+    // 2. Extract structured memories & generate warm companion response via Groq LLM
     console.log(`[POST /api/chat] Extracting memories from entry for user: ${userId}...`);
-    const extractedList = await extractMemories(text);
+    const extractionResult = await extractMemories(text);
+    const extractedList = Array.isArray(extractionResult) 
+      ? extractionResult 
+      : (extractionResult.memories || []);
+    const companionReply = extractionResult.reply || "Thank you for sharing your thoughts with me.";
 
-    // 3. For each extracted memory: generate embedding, calculate expires_at, insert to memories
-    const insertedMemories = [];
+    // 3. For each extracted memory: generate embedding, calculate expires_at, insert to memories in parallel
+    console.log(`[POST /api/chat] Generating Gemini embeddings in parallel for ${extractedList.length} memories...`);
+    const memoryDocsToInsert = await Promise.all(
+      extractedList.map(async (mem) => {
+        const embedding = await getEmbedding(`${mem.type}: ${mem.content}`);
+        const expiresAt = mem.is_temporary 
+          ? new Date(Date.now() + 24 * 60 * 60 * 1000) 
+          : null;
 
-    for (const mem of extractedList) {
-      // Generate 1536-dim embedding via OpenAI
-      const embedding = await getEmbedding(`${mem.type}: ${mem.content}`);
-
-      // Calculate expires_at: if is_temporary, set to 24h from now
-      const expiresAt = mem.is_temporary 
-        ? new Date(Date.now() + 24 * 60 * 60 * 1000) 
-        : null;
-
-      const memoryDoc = {
-        user_id: userId,
-        entry_id: entryId,
-        type: mem.type,
-        content: mem.content,
-        source_quote: mem.source_quote,
-        embedding,
-        status: 'active',
-        is_private: false,
-        expires_at: expiresAt,
-        supersedes_id: null,
-        created_at: new Date()
-      };
-
-      const result = await db.collection('memories').insertOne(memoryDoc);
-      const insertedId = result.insertedId.toString();
-
-      const savedMemory = { ...memoryDoc, _id: insertedId };
-      insertedMemories.push(savedMemory);
-
-      // Record audit event in `memory_events` collection
-      await db.collection('memory_events').insertOne({
-        user_id: userId,
-        memory_id: insertedId,
-        event_type: 'memory_created',
-        timestamp: new Date(),
-        metadata: {
+        return {
+          user_id: userId,
+          entry_id: entryId,
           type: mem.type,
-          source_entry_id: entryId,
-          content_summary: mem.content.slice(0, 50)
-        }
+          content: mem.content,
+          source_quote: mem.source_quote,
+          embedding,
+          status: 'active',
+          is_private: false,
+          expires_at: expiresAt,
+          supersedes_id: null,
+          created_at: new Date()
+        };
+      })
+    );
+
+    const insertedMemories = [];
+    if (memoryDocsToInsert.length > 0) {
+      const insertResult = await db.collection('memories').insertMany(memoryDocsToInsert);
+      const insertedIds = Object.values(insertResult.insertedIds).map(id => id.toString());
+
+      const auditEvents = memoryDocsToInsert.map((doc, idx) => {
+        const memoryId = insertedIds[idx];
+        insertedMemories.push({ ...doc, _id: memoryId });
+        return {
+          user_id: userId,
+          memory_id: memoryId,
+          event_type: 'memory_created',
+          timestamp: new Date(),
+          metadata: {
+            type: doc.type,
+            source_entry_id: entryId,
+            content_summary: doc.content.slice(0, 50)
+          }
+        };
       });
+
+      await db.collection('memory_events').insertMany(auditEvents);
     }
 
     console.log(`[POST /api/chat] Successfully stored ${insertedMemories.length} memories.`);
@@ -141,7 +148,7 @@ app.post('/api/chat', async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Journal entry processed and memories extracted.',
-      reply: `I've ingested your reflection and extracted ${insertedMemories.length} structured memories into your MongoDB vault.`,
+      reply: companionReply,
       mode: 'journal',
       extractedMemories: insertedMemories.map(serializeDoc),
       memories: insertedMemories.map(serializeDoc)
@@ -237,13 +244,15 @@ async function retrieveRelevantMemories(db, userId, queryText, queryEmbedding = 
     ];
 
     const results = await db.collection('memories').aggregate(pipeline).toArray();
-    if (results && results.length > 0) {
-      retrievedMemories = results;
+    // Strict Grounding Gate: score >= 0.70
+    const qualified = (results || []).filter(doc => (doc.score || 0) >= 0.70);
+    if (qualified.length > 0) {
+      retrievedMemories = qualified;
       usedNativeVectorSearch = true;
-      results.forEach(doc => {
+      qualified.forEach(doc => {
         similarityScores[doc._id.toString()] = Number((doc.score || 0.85).toFixed(2));
       });
-      console.log(`[Vector Search] Native Atlas $vectorSearch matched ${results.length} memories.`);
+      console.log(`[Vector Search] Native Atlas $vectorSearch matched ${qualified.length} grounded memories (score >= 0.70).`);
     }
   } catch (vectorErr) {
     try {
@@ -277,20 +286,22 @@ async function retrieveRelevantMemories(db, userId, queryText, queryEmbedding = 
         }
       ];
       const results = await db.collection('memories').aggregate(fallbackPipeline).toArray();
-      if (results && results.length > 0) {
-        retrievedMemories = results;
+      // Strict Grounding Gate: score >= 0.70
+      const qualified = (results || []).filter(doc => (doc.score || 0) >= 0.70);
+      if (qualified.length > 0) {
+        retrievedMemories = qualified;
         usedNativeVectorSearch = true;
-        results.forEach(doc => {
+        qualified.forEach(doc => {
           similarityScores[doc._id.toString()] = Number((doc.score || 0.85).toFixed(2));
         });
-        console.log(`[Vector Search] Native Atlas $vectorSearch (post-filter) matched ${results.length} memories.`);
+        console.log(`[Vector Search] Native Atlas $vectorSearch (post-filter) matched ${qualified.length} grounded memories (score >= 0.70).`);
       }
     } catch (secondErr) {
       console.warn(`[Vector Search Notice] Native Atlas $vectorSearch stage not active (${secondErr.message}). Using in-memory cosine fallback over eligible documents.`);
     }
   }
 
-  // 2. In-Memory Cosine Fallback
+  // 2. In-Memory Cosine Fallback with Strict Grounding Gate (score >= 0.72)
   if (!usedNativeVectorSearch) {
     const eligibleDocs = await db.collection('memories').find(vectorFilter).toArray();
 
@@ -301,13 +312,14 @@ async function retrieveRelevantMemories(db, userId, queryText, queryEmbedding = 
 
     scored.sort((a, b) => b.score - a.score);
 
-    const topMatches = scored.filter(s => s.score >= 0.50).slice(0, 3);
+    // Strict Grounding Gate: score >= 0.72
+    const topMatches = scored.filter(s => s.score >= 0.72).slice(0, 3);
     retrievedMemories = topMatches.map(s => {
       const serialized = serializeDoc(s.doc);
       similarityScores[serialized._id] = Number(s.score.toFixed(2));
       return serialized;
     });
-    console.log(`[Cosine Fallback] Scored ${eligibleDocs.length} eligible documents. Matched ${retrievedMemories.length} relevant memories.`);
+    console.log(`[Cosine Fallback] Scored ${eligibleDocs.length} eligible documents. Matched ${retrievedMemories.length} grounded memories (score >= 0.72).`);
   }
 
   // 3. Count private memories for privacy shield
@@ -824,12 +836,14 @@ app.get('/api/memory-events', async (req, res) => {
 // 9. GET /api/health - System Health Check
 // ==========================================
 app.get('/api/health', (req, res) => {
+  const hasGemini = Boolean(process.env.GEMINI_API_KEY && !process.env.GEMINI_API_KEY.startsWith('your_'));
+  const hasGroq = Boolean(process.env.GROQ_API_KEY && !process.env.GROQ_API_KEY.startsWith('your_'));
   res.json({
     status: 'online',
     timestamp: new Date().toISOString(),
     database: getIsConnected() ? 'connected (MongoDB Atlas / local)' : 'running (in-memory mode)',
-    llm: process.env.GROQ_API_KEY ? 'Groq llama-3.3-70b-versatile' : 'Local fallback simulation',
-    embeddings: process.env.OPENAI_API_KEY ? 'OpenAI text-embedding-3-small' : 'Deterministic 1536-dim vector'
+    llm: hasGroq ? 'Groq llama-3.3-70b-versatile' : 'Local fail-closed fallback',
+    embeddings: hasGemini ? 'Google Gemini text-embedding-004 (768-dim)' : 'Deterministic normalized vector (768-dim)'
   });
 });
 

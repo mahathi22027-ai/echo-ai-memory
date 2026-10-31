@@ -11,7 +11,8 @@ import {
   Bot,
   User,
   Clock,
-  ArrowRight
+  ArrowRight,
+  CheckCircle2
 } from 'lucide-react';
 
 export default function ChatPanel() {
@@ -225,8 +226,8 @@ export default function ChatPanel() {
                 {isEcho && msg.extractedMemories && msg.extractedMemories.length > 0 && (
                   <div className="extracted-section">
                     <div className="extracted-title">
-                      <BookOpen size={13} className="text-cyan" />
-                      <span>Structured Memory Extracted:</span>
+                      <CheckCircle2 size={13} className="text-emerald" />
+                      <span>Saved to Memory Vault:</span>
                     </div>
                     <div className="extracted-chips">
                       {msg.extractedMemories.map((memId) => {

@@ -23,7 +23,7 @@ const STORAGE_KEYS = {
 const DEFAULT_CONFIG = {
   baseUrl: 'http://localhost:5000/api',
   mode: 'auto', // 'auto' | 'live' | 'mock'
-  timeoutMs: 3000
+  timeoutMs: 8000 // Raised from 3000ms to 8000ms to prevent premature fallback to local storage
 };
 
 // Load saved config or default
@@ -804,7 +804,7 @@ function mockSendChatMessage({ message, mode, userId }) {
     extractedContent = 'Set milestone for tangible deliverable within specified timeframe.';
   } else {
     extractedType = 'event';
-    extractedContent = 'Logged notable milestone and experiential context.';
+    extractedContent = message.trim().replace(/[.?!]+$/, '').slice(0, 80) || 'Personal milestone reflection';
   }
 
   // Quote extraction - must be verifiable exact substring (Page 3 acceptance check)
@@ -848,10 +848,21 @@ function mockSendChatMessage({ message, mode, userId }) {
   setStoredData(STORAGE_KEYS.MEMORIES, memories);
   setStoredData(STORAGE_KEYS.EVENTS, events);
 
+  let warmReply = "Thank you for sharing this reflection. Writing your thoughts down is such a grounding practice.";
+  if (lowerMsg.includes('trip') || lowerMsg.includes('travel') || lowerMsg.includes('vacation')) {
+    warmReply = "A trip sounds so refreshing! Getting away from your everyday routine is such a great way to recharge. Where did you go, and what was the highlight?";
+  } else if (lowerMsg.includes('nervous') || lowerMsg.includes('presentation') || lowerMsg.includes('scared')) {
+    warmReply = "It's completely natural to feel nervous. Give yourself credit for stepping up—you've got what it takes, and I'm cheering you on!";
+  } else if (extractedType === 'feeling') {
+    warmReply = "I hear you, and validating how you feel is such an important step. How has this been affecting your day?";
+  } else if (extractedType === 'decision') {
+    warmReply = "That sounds like a meaningful commitment to yourself. How are you feeling about taking this step forward?";
+  }
+
   return {
     success: true,
     mode: 'journal',
-    reply: `I've ingested your reflection and extracted a structured ${extractedType.toUpperCase()} memory. It's now indexed in MongoDB Atlas and available for contextual recall in future sessions.`,
+    reply: warmReply,
     extractedMemories: [newMemory],
     auditEvent: events[0]
   };
