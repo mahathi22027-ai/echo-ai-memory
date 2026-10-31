@@ -13,38 +13,44 @@ import {
   Sparkles, 
   CheckCircle,
   ShieldCheck,
-  RefreshCw
+  RefreshCw,
+  Eye,
+  ChevronDown,
+  ChevronRight,
+  Database,
+  BarChart3
 } from 'lucide-react';
 
 export default function SystemLogPanel() {
-  const { events, refreshAllData, setHighlightedMemoryId, setActiveTabMobile } = useApp();
+  const { events, refreshAllData, setHighlightedMemoryId, openMemoryDetail, activePage } = useApp();
   const [selectedEventType, setSelectedEventType] = useState('all');
+  const [expandedEventId, setExpandedEventId] = useState(null);
 
   const getEventIcon = (type) => {
     switch (type) {
       case 'memory_created':
-        return <PlusCircle size={14} className="text-emerald" />;
+        return <PlusCircle size={15} className="text-emerald" />;
       case 'memory_superseded':
-        return <GitBranch size={14} className="text-purple" />;
+        return <GitBranch size={15} className="text-purple" />;
       case 'memory_marked_private':
-        return <Lock size={14} className="text-amber" />;
+        return <Lock size={15} className="text-amber" />;
       case 'memory_unhidden':
-        return <Unlock size={14} className="text-cyan" />;
+        return <Unlock size={15} className="text-cyan" />;
       case 'memory_deleted':
-        return <Trash2 size={14} className="text-rose" />;
+        return <Trash2 size={15} className="text-rose" />;
       case 'vector_recall':
-        return <Search size={14} className="text-blue" />;
+        return <Search size={15} className="text-blue" />;
       case 'memory_expired':
       case 'memory_expiry_configured':
-        return <Clock size={14} className="text-amber" />;
+        return <Clock size={15} className="text-amber" />;
       default:
-        return <Activity size={14} className="text-slate" />;
+        return <Activity size={15} className="text-slate" />;
     }
   };
 
   const getEventLabel = (type) => {
     switch (type) {
-      case 'memory_created': return 'Memory Created';
+      case 'memory_created': return 'Memory Ingested';
       case 'memory_superseded': return 'Memory Superseded';
       case 'memory_marked_private': return 'Marked Private';
       case 'memory_unhidden': return 'Unhidden (Public)';
@@ -60,72 +66,121 @@ export default function SystemLogPanel() {
     ? events
     : events.filter(e => e.event_type === selectedEventType);
 
+  const createdCount = events.filter(e => e.event_type === 'memory_created').length;
+  const supersededCount = events.filter(e => e.event_type === 'memory_superseded').length;
+  const recallCount = events.filter(e => e.event_type === 'vector_recall').length;
+  const privacyCount = events.filter(e => e.event_type === 'memory_marked_private' || e.event_type === 'memory_unhidden').length;
+
   const handleEventMemoryClick = (memId) => {
     if (!memId || memId === 'none') return;
     setHighlightedMemoryId(memId);
-    setActiveTabMobile('inspector');
+    openMemoryDetail(memId);
+  };
+
+  const toggleExpand = (id) => {
+    setExpandedEventId(prev => (prev === id ? null : id));
   };
 
   return (
-    <div className="panel log-panel">
+    <div className={`panel log-panel ${activePage === 'analytics' ? 'fullpage-analytics' : ''}`}>
       {/* Panel Header */}
       <div className="panel-header">
         <div className="panel-title-group">
           <div className="panel-title-icon-wrapper log-color">
-            <Activity size={16} />
+            <Activity size={18} />
           </div>
           <div>
-            <h2 className="panel-title">System Audit Log</h2>
-            <p className="panel-description">Non-sensitive lifecycle & vector event stream</p>
+            <h2 className="panel-title">System Audit Log & Analytics</h2>
+            <p className="panel-description">Non-sensitive lifecycle, evolution & vector event stream</p>
           </div>
         </div>
         <button 
           className="icon-refresh-btn" 
           onClick={refreshAllData} 
-          title="Refresh audit events from MongoDB"
+          title="Refresh audit events from MongoDB Atlas"
         >
-          <RefreshCw size={13} />
+          <RefreshCw size={14} />
+          <span>Refresh</span>
         </button>
+      </div>
+
+      {/* Top Metrics Cards (when in analytics page or wide view) */}
+      <div className="analytics-metrics-overview">
+        <div className="analytics-metric-card">
+          <div className="metric-icon-wrap stat-purple">
+            <Activity size={16} />
+          </div>
+          <div className="metric-data">
+            <span className="metric-number">{events.length}</span>
+            <span className="metric-label">Total Audit Events</span>
+          </div>
+        </div>
+
+        <div className="analytics-metric-card">
+          <div className="metric-icon-wrap stat-emerald">
+            <PlusCircle size={16} />
+          </div>
+          <div className="metric-data">
+            <span className="metric-number">{createdCount}</span>
+            <span className="metric-label">Ingested Knowledge</span>
+          </div>
+        </div>
+
+        <div className="analytics-metric-card">
+          <div className="metric-icon-wrap stat-blue">
+            <Search size={16} />
+          </div>
+          <div className="metric-data">
+            <span className="metric-number">{recallCount}</span>
+            <span className="metric-label">Vector Recalls ($vectorSearch)</span>
+          </div>
+        </div>
+
+        <div className="analytics-metric-card">
+          <div className="metric-icon-wrap stat-amber">
+            <ShieldCheck size={16} />
+          </div>
+          <div className="metric-data">
+            <span className="metric-number">{privacyCount}</span>
+            <span className="metric-label">Privacy Guard Actions</span>
+          </div>
+        </div>
       </div>
 
       {/* Log Filter Pills */}
       <div className="log-filter-bar">
-        <button 
-          className={`log-filter-chip ${selectedEventType === 'all' ? 'active' : ''}`}
-          onClick={() => setSelectedEventType('all')}
-        >
-          All Events ({events.length})
-        </button>
-        <button 
-          className={`log-filter-chip ${selectedEventType === 'vector_recall' ? 'active' : ''}`}
-          onClick={() => setSelectedEventType('vector_recall')}
-        >
-          Vector Recall
-        </button>
-        <button 
-          className={`log-filter-chip ${selectedEventType === 'memory_superseded' ? 'active' : ''}`}
-          onClick={() => setSelectedEventType('memory_superseded')}
-        >
-          Superseded
-        </button>
-        <button 
-          className={`log-filter-chip ${selectedEventType === 'memory_marked_private' ? 'active' : ''}`}
-          onClick={() => setSelectedEventType('memory_marked_private')}
-        >
-          Privacy
-        </button>
+        {[
+          { id: 'all', label: `All Events (${events.length})` },
+          { id: 'vector_recall', label: `Vector Recalls (${recallCount})` },
+          { id: 'memory_created', label: `Ingested (${createdCount})` },
+          { id: 'memory_superseded', label: `Superseded (${supersededCount})` },
+          { id: 'memory_marked_private', label: 'Privacy Changes' }
+        ].map(filter => (
+          <button 
+            key={filter.id}
+            className={`log-filter-chip ${selectedEventType === filter.id ? 'active' : ''}`}
+            onClick={() => setSelectedEventType(filter.id)}
+          >
+            {filter.label}
+          </button>
+        ))}
       </div>
 
       {/* Events List */}
       <div className="events-stream-container">
         {filteredEvents.length === 0 ? (
           <div className="empty-log-state">
-            <Activity size={28} className="empty-icon" />
-            <p>No audit events match this filter</p>
+            <Activity size={36} className="empty-icon text-muted" />
+            <p className="empty-title">No audit events match this filter</p>
+            <p className="empty-sub">Interact with the journal or execute a demo step to generate events.</p>
           </div>
         ) : (
           filteredEvents.map((evt) => {
-            const timeStr = new Date(evt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const timeDate = new Date(evt.timestamp);
+            const timeStr = timeDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const dateStr = timeDate.toLocaleDateString([], { month: 'short', day: 'numeric' });
+            const isExpanded = expandedEventId === evt._id;
+
             return (
               <div key={evt._id} className="audit-event-item">
                 <div className="event-icon-badge">
@@ -134,54 +189,71 @@ export default function SystemLogPanel() {
 
                 <div className="event-details">
                   <div className="event-header-row">
-                    <span className="event-type-name">
-                      {getEventLabel(evt.event_type)}
+                    <div className="event-title-group">
+                      <span className="event-type-name">
+                        {getEventLabel(evt.event_type)}
+                      </span>
+                      {evt.memory_id && evt.memory_id !== 'none' && (
+                        <button
+                          className="event-memory-pill"
+                          onClick={() => handleEventMemoryClick(evt.memory_id)}
+                          title="Click to view memory popup"
+                        >
+                          <Eye size={11} />
+                          <span>{evt.memory_id}</span>
+                        </button>
+                      )}
+                    </div>
+                    <span className="event-timestamp">
+                      {dateStr} {timeStr}
                     </span>
-                    <span className="event-timestamp">{timeStr}</span>
                   </div>
 
-                  {/* Memory ID Link */}
-                  {evt.memory_id && evt.memory_id !== 'none' && (
-                    <div className="event-memory-link">
-                      <span className="event-label">Memory:</span>
-                      <button 
-                        className="event-id-btn"
-                        onClick={() => handleEventMemoryClick(evt.memory_id)}
-                        title="Highlight memory in inspector"
-                      >
-                        {evt.memory_id}
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Metadata key-values (strictly non-sensitive) */}
+                  {/* Metadata preview summary */}
                   {evt.metadata && (
-                    <div className="event-metadata-box">
+                    <div className="event-meta-summary">
                       {evt.metadata.type && (
-                        <span className="meta-pill meta-type">type: {evt.metadata.type}</span>
-                      )}
-                      {evt.metadata.top_similarity_score !== undefined && (
-                        <span className="meta-pill meta-score">
-                          similarity: {Math.round(evt.metadata.top_similarity_score * 100)}%
+                        <span className="meta-tag type-tag">
+                          Type: {evt.metadata.type}
                         </span>
                       )}
-                      {evt.metadata.private_excluded_count > 0 && (
-                        <span className="meta-pill meta-private">
-                          private shielded: {evt.metadata.private_excluded_count}
+                      {evt.metadata.policy && (
+                        <span className="meta-tag policy-tag">
+                          Policy: {evt.metadata.policy}
                         </span>
                       )}
-                      {evt.metadata.superseded_memory_id && (
-                        <span className="meta-pill meta-superseded">
-                          replaces: {evt.metadata.superseded_memory_id}
-                        </span>
-                      )}
-                      {evt.metadata.ttl_configured && (
-                        <span className="meta-pill meta-ttl">
-                          ttl: {evt.metadata.ttl_configured}
+                      {evt.metadata.reason && (
+                        <span className="meta-tag reason-tag">
+                          {evt.metadata.reason}
                         </span>
                       )}
                       {evt.metadata.note && (
-                        <span className="meta-note">{evt.metadata.note}</span>
+                        <span className="meta-tag note-tag">
+                          {evt.metadata.note}
+                        </span>
+                      )}
+                      {evt.metadata.query_preview && (
+                        <span className="meta-tag query-tag">
+                          Query: "{evt.metadata.query_preview}"
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Collapsible raw metadata toggle */}
+                  {evt.metadata && Object.keys(evt.metadata).length > 0 && (
+                    <div className="event-expand-wrap">
+                      <button
+                        className="event-expand-btn"
+                        onClick={() => toggleExpand(evt._id)}
+                      >
+                        {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                        <span>{isExpanded ? 'Hide Raw JSON Payload' : 'Inspect JSON Payload'}</span>
+                      </button>
+                      {isExpanded && (
+                        <pre className="event-json-dump">
+                          {JSON.stringify(evt.metadata, null, 2)}
+                        </pre>
                       )}
                     </div>
                   )}
@@ -190,11 +262,6 @@ export default function SystemLogPanel() {
             );
           })
         )}
-      </div>
-
-      <div className="log-footer-privacy-note">
-        <ShieldCheck size={12} className="text-emerald" />
-        <span>Privacy Notice: Raw journal text is excluded from the audit log per security specifications.</span>
       </div>
     </div>
   );

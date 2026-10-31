@@ -24,11 +24,11 @@ export default function ApiSettingsModal() {
     showToast
   } = useApp();
 
-  if (!isApiSettingsOpen) return null;
-
   const [baseUrlInput, setBaseUrlInput] = useState(apiConfig.baseUrl);
   const [modeInput, setModeInput] = useState(apiConfig.mode);
   const [copiedKey, setCopiedKey] = useState(null);
+
+  if (!isApiSettingsOpen) return null;
 
   const handleSave = (e) => {
     e.preventDefault();

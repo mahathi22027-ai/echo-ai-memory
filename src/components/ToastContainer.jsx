@@ -1,6 +1,6 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
-import { CheckCircle2, AlertTriangle, AlertCircle, Info, X } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, AlertCircle, Info } from 'lucide-react';
 
 export default function ToastContainer() {
   const { toasts } = useApp();

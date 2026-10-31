@@ -2,14 +2,19 @@ import React from 'react';
 import { useApp } from '../context/AppContext';
 import { 
   Sparkles, 
-  Database, 
   RotateCcw, 
   PlayCircle, 
   Sliders, 
   ShieldCheck, 
-  ExternalLink,
+  Layers,
+  Sun,
+  Moon,
+  PlusCircle,
+  Eye,
+  MessageSquare,
+  BrainCircuit,
   Activity,
-  Layers
+  Columns
 } from 'lucide-react';
 
 export default function Navbar() {
@@ -20,48 +25,87 @@ export default function Navbar() {
     isDemoBarOpen, 
     setIsDemoBarOpen,
     handleResetData,
-    activeTabMobile,
-    setActiveTabMobile
+    activePage,
+    setActivePage,
+    theme,
+    toggleTheme,
+    setIsNewMemoryModalOpen,
+    setIsQuickInspectorOpen
   } = useApp();
 
   const activeMemoriesCount = memories.filter(m => m.status === 'active').length;
   const privateCount = memories.filter(m => m.is_private).length;
 
+  const getPageInfo = () => {
+    switch (activePage) {
+      case 'chat':
+        return {
+          title: 'AI Journal & Chat',
+          badge: 'Semantic Reflection'
+        };
+      case 'memories':
+        return {
+          title: 'Memory Vault',
+          badge: `${memories.length} Documents`
+        };
+      case 'analytics':
+        return {
+          title: 'System Analytics & Audit',
+          badge: 'Lifecycle Stream'
+        };
+      case 'studio':
+        return {
+          title: 'Studio Workspace',
+          badge: 'Multi-Panel View'
+        };
+      default:
+        return {
+          title: 'AI Journal & Chat',
+          badge: 'Active'
+        };
+    }
+  };
+
+  const pageInfo = getPageInfo();
+
   return (
     <header className="navbar">
-      <div className="navbar-brand-section">
-        <div className="brand-icon-wrapper">
-          <div className="brand-pulse-ring"></div>
-          <svg className="brand-svg" viewBox="0 0 32 32" fill="none">
-            <circle cx="16" cy="16" r="13" stroke="currentColor" strokeWidth="2" strokeDasharray="3 3" opacity="0.4" />
-            <circle cx="16" cy="16" r="8" stroke="currentColor" strokeWidth="2" opacity="0.8" />
-            <circle cx="16" cy="16" r="4" fill="currentColor" />
-          </svg>
-        </div>
-        <div className="brand-text-wrapper">
-          <div className="brand-title-row">
-            <h1 className="brand-title">ECHO</h1>
-            <span className="brand-tag">Agentic Memory</span>
-            <span className="brand-hackathon-pill">MongoDB Hackathon</span>
+      {/* Left: Active View Breadcrumb / Title */}
+      <div className="navbar-page-title-section">
+        <div className="navbar-badge-pulse"></div>
+        <div>
+          <div className="title-row">
+            <h1 className="navbar-heading">{pageInfo.title}</h1>
+            <span className="navbar-page-badge">{pageInfo.badge}</span>
           </div>
-          <p className="brand-subtitle">A private AI journal with memory that evolves</p>
+          <p className="navbar-subheading">
+            Private AI journal powered by MongoDB Atlas Agentic Memory
+          </p>
         </div>
       </div>
 
-      {/* Middle status badges */}
+      {/* Middle: Active Memory & Privacy Stats */}
       <div className="navbar-stats-row">
-        <div className="stat-pill" title="Memories eligible for semantic vector retrieval">
-          <Layers size={14} className="stat-icon" />
+        <button
+          className="stat-pill"
+          onClick={() => setActivePage('memories')}
+          title="Click to view Vector Memory Vault"
+        >
+          <Layers size={14} className="stat-icon text-indigo" />
           <span className="stat-number">{activeMemoriesCount}</span>
           <span className="stat-label">Active Memories</span>
-        </div>
+        </button>
 
         {privateCount > 0 && (
-          <div className="stat-pill private-pill" title="Private memories shielded from LLM context">
+          <button 
+            className="stat-pill private-pill"
+            onClick={() => setActivePage('memories')}
+            title="Private memories shielded from LLM context"
+          >
             <ShieldCheck size={14} className="stat-icon text-amber" />
             <span className="stat-number">{privateCount}</span>
             <span className="stat-label">Privacy Shielded</span>
-          </div>
+          </button>
         )}
 
         <button 
@@ -71,60 +115,97 @@ export default function Navbar() {
         >
           <span className="backend-dot"></span>
           <span className="backend-text">
-            {backendStatus.isConnected ? 'Backend: Live (Connected)' : 'Backend: Standalone (Ready for API)'}
+            {backendStatus.isConnected ? 'Backend: Live' : 'Backend: Standalone'}
           </span>
           <Sliders size={13} className="backend-icon" />
         </button>
       </div>
 
-      {/* Action buttons */}
+      {/* Right: Quick Action Controls */}
       <div className="navbar-actions">
+        {/* Quick Add Memory */}
+        <button
+          className="action-btn navbar-add-btn"
+          onClick={() => setIsNewMemoryModalOpen(true)}
+          title="Add Memory Document directly"
+        >
+          <PlusCircle size={14} />
+          <span>New Memory</span>
+        </button>
+
+        {/* Quick Peek Drawer */}
+        <button
+          className="action-btn secondary-btn"
+          onClick={() => setIsQuickInspectorOpen(true)}
+          title="Open slide-over quick memory peek drawer"
+        >
+          <Eye size={14} />
+          <span>Peek</span>
+        </button>
+
+        {/* Demo Script Walkthrough */}
         <button 
           className={`action-btn demo-btn ${isDemoBarOpen ? 'active' : ''}`}
           onClick={() => setIsDemoBarOpen(!isDemoBarOpen)}
           title="Toggle Judge Demo Script Walkthrough"
         >
-          <PlayCircle size={15} />
-          <span>Demo Walkthrough</span>
+          <PlayCircle size={14} />
+          <span>Demo Script</span>
         </button>
 
+        {/* Theme Toggle Button */}
+        <button
+          className="action-btn theme-switch-btn"
+          onClick={toggleTheme}
+          title={`Switch to ${theme === 'aurora-light' ? 'Electric Cyber Dark' : 'Vibrant Aurora Light'}`}
+        >
+          {theme === 'aurora-light' ? (
+            <Moon size={15} className="text-indigo" />
+          ) : (
+            <Sun size={15} className="text-amber" />
+          )}
+        </button>
+
+        {/* Reset Demo Button */}
         <button 
           className="action-btn secondary-btn"
           onClick={handleResetData}
           title="Reset to clean demonstration state"
         >
           <RotateCcw size={14} />
-          <span>Reset Demo</span>
-        </button>
-
-        <button 
-          className="action-btn icon-only-btn"
-          onClick={() => setIsApiSettingsOpen(true)}
-          title="API Documentation & Backend Settings"
-        >
-          <Sliders size={16} />
+          <span>Reset</span>
         </button>
       </div>
 
-      {/* Mobile panel tab switcher */}
+      {/* Mobile Page Tab Bar */}
       <div className="mobile-tab-bar">
         <button 
-          className={`mobile-tab-btn ${activeTabMobile === 'chat' ? 'active' : ''}`}
-          onClick={() => setActiveTabMobile('chat')}
+          className={`mobile-tab-btn ${activePage === 'chat' ? 'active' : ''}`}
+          onClick={() => setActivePage('chat')}
         >
-          Chat & Journal
+          <MessageSquare size={14} />
+          <span>Journal</span>
         </button>
         <button 
-          className={`mobile-tab-btn ${activeTabMobile === 'inspector' ? 'active' : ''}`}
-          onClick={() => setActiveTabMobile('inspector')}
+          className={`mobile-tab-btn ${activePage === 'memories' ? 'active' : ''}`}
+          onClick={() => setActivePage('memories')}
         >
-          Memories ({memories.length})
+          <BrainCircuit size={14} />
+          <span>Vault ({memories.length})</span>
         </button>
         <button 
-          className={`mobile-tab-btn ${activeTabMobile === 'logs' ? 'active' : ''}`}
-          onClick={() => setActiveTabMobile('logs')}
+          className={`mobile-tab-btn ${activePage === 'analytics' ? 'active' : ''}`}
+          onClick={() => setActivePage('analytics')}
         >
-          System Log
+          <Activity size={14} />
+          <span>Audit</span>
+        </button>
+        <button 
+          className={`mobile-tab-btn ${activePage === 'studio' ? 'active' : ''}`}
+          onClick={() => setActivePage('studio')}
+        >
+          <Columns size={14} />
+          <span>Studio</span>
         </button>
       </div>
     </header>
