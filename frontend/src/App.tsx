@@ -131,7 +131,7 @@ export default function App() {
   const [logOpen, setLogOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [backendUrl, setBackendUrl] = useState(() => localStorage.getItem(API_URL_KEY) || import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000/api')
+  const [backendUrl, setBackendUrl] = useState(() => localStorage.getItem(API_URL_KEY) || `${import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000'}/api`)
   const [backendConnected, setBackendConnected] = useState<boolean | null>(null)
   const [filterType, setFilterType] = useState<string>('all')
 
