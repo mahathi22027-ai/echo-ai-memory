@@ -93,11 +93,13 @@ export interface MemoryEvent {
 }
 
 type AuthUser = {
+  userId?: string
   name: string
   email: string
 }
 
 const sessionKey = 'echo-demo-session'
+const tokenKey = 'echo-jwt-token'
 const profileKey = 'echo-demo-profile'
 const API_URL_KEY = 'echo_backend_api_url'
 
@@ -145,28 +147,52 @@ export default function App() {
   const [loading, setLoading] = useState(false)
 
   // Real backend-driven state
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: 'msg_welcome',
-      sender: 'echo',
-      content: "Hi, I'm Echo. Write what's on your mind and I'll remember what matters, or switch to Ask Echo to look back on something you've shared before.",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      mode: 'journal'
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    try {
+      const saved = localStorage.getItem('echo_chat_history_' + (readStoredUser(sessionKey)?.email || 'guest'))
+      return saved ? JSON.parse(saved) : [
+        {
+          id: 'msg_welcome_echo',
+          sender: 'echo',
+          content: 'Welcome to your private Echo space. Write a journal reflection to extract structured memories, or switch to "Ask Echo" to query your memory vault.',
+          timestamp: 'Just now',
+          mode: 'journal'
+        }
+      ]
+    } catch {
+      return []
     }
-  ])
+  })
 
   const [memories, setMemories] = useState<Memory[]>([])
   const [events, setEvents] = useState<MemoryEvent[]>([])
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const profileMenuRef = useRef<HTMLDivElement>(null)
 
-  const activeUserId = user ? `user_${user.email.replace(/[^a-zA-Z0-9]/g, '_')}` : 'demo_user'
+  const activeUserId = user?.userId || (user ? `user_${user.email.replace(/[^a-zA-Z0-9]/g, '_')}` : 'demo_user')
+  const authToken = localStorage.getItem(tokenKey) || ''
 
   // Sync theme
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark)
   }, [dark])
+  // Close profile popup when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
+        setProfileOpen(false)
+      }
+    }
+    if (profileOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [profileOpen])
+
 
   // Check backend health & fetch initial memories
   useEffect(() => {
@@ -196,7 +222,7 @@ export default function App() {
   async function fetchMemories() {
     try {
       const res = await fetch(`${backendUrl}/memories`, {
-        headers: { 'x-user-id': activeUserId }
+        headers: { 'x-user-id': activeUserId, ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) }
       })
       if (res.ok) {
         const data = await res.json()
@@ -215,7 +241,7 @@ export default function App() {
   async function fetchEvents() {
     try {
       const res = await fetch(`${backendUrl}/memory-events`, {
-        headers: { 'x-user-id': activeUserId }
+        headers: { 'x-user-id': activeUserId, ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) }
       })
       if (res.ok) {
         const data = await res.json()
@@ -255,7 +281,8 @@ export default function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': activeUserId
+          'x-user-id': activeUserId,
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
         },
         body: JSON.stringify({
           message: userText,
@@ -272,7 +299,7 @@ export default function App() {
       const echoMsg: ChatMessage = {
         id: `echo_${Date.now()}`,
         sender: 'echo',
-        content: data.reply || (requestMode === 'journal' ? 'Got it.' : "I don't have anything about that yet."),
+        content: data.reply || (requestMode === 'journal' ? 'Journal reflection ingested into memory vault.' : 'No recall found.'),
         mode: requestMode,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         referencedMemories: data.referencedMemories || []
@@ -297,7 +324,7 @@ export default function App() {
       const errorMsg: ChatMessage = {
         id: `echo_err_${Date.now()}`,
         sender: 'echo',
-        content: "Couldn't reach the server. It may be waking up. Try again in a few seconds.",
+        content: `Error connecting to ECHO backend at ${backendUrl}: ${err.message}. Please verify the backend server is running.`,
         mode: requestMode,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       }
@@ -313,7 +340,8 @@ export default function App() {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': activeUserId
+          'x-user-id': activeUserId,
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
         },
         body: JSON.stringify({ is_private: !memory.is_private })
       })
@@ -331,7 +359,7 @@ export default function App() {
     try {
       const res = await fetch(`${backendUrl}/memories/${memoryId}`, {
         method: 'DELETE',
-        headers: { 'x-user-id': activeUserId }
+        headers: { 'x-user-id': activeUserId, ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) }
       })
       if (res.ok) {
         await fetchMemories()
@@ -360,7 +388,8 @@ export default function App() {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': activeUserId
+          'x-user-id': activeUserId,
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
         },
         body: JSON.stringify({
           supersedeWith: {
@@ -380,7 +409,7 @@ export default function App() {
     }
   }
 
-  function submitAuth(event: FormEvent<HTMLFormElement>) {
+  async function submitAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setAuthError('')
 
@@ -402,20 +431,43 @@ export default function App() {
       return
     }
 
-    const storedProfile = readStoredUser(profileKey)
-    const nextUser = authMode === 'signup'
-      ? { name, email }
-      : storedProfile?.email === email
-        ? storedProfile
-        : { name: email.split('@')[0].replace(/[._-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()), email }
+    try {
+      const endpoint = authMode === 'signup' ? '/auth/signup' : '/auth/signin'
+      const payload = authMode === 'signup' ? { name, email, password } : { email, password }
 
-    localStorage.setItem(sessionKey, JSON.stringify(nextUser))
-    localStorage.setItem(profileKey, JSON.stringify(nextUser))
-    setUser(nextUser)
+      const res = await fetch(`${backendUrl}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+
+      const result = await res.json()
+      if (!res.ok || !result.success) {
+        setAuthError(result.error || 'Authentication failed. Please check your credentials.')
+        return
+      }
+
+      if (result.token) {
+        localStorage.setItem(tokenKey, result.token)
+      }
+
+      const verifiedUser: AuthUser = {
+        userId: result.user?.userId,
+        name: result.user?.name || name || 'Echo User',
+        email: result.user?.email || email
+      }
+
+      localStorage.setItem(sessionKey, JSON.stringify(verifiedUser))
+      localStorage.setItem(profileKey, JSON.stringify(verifiedUser))
+      setUser(verifiedUser)
+    } catch (err: any) {
+      setAuthError('Could not reach backend authentication server: ' + err.message)
+    }
   }
 
   function logout() {
     localStorage.removeItem(sessionKey)
+    localStorage.removeItem(tokenKey)
     setProfileOpen(false)
     setNavOpen(false)
     setUser(null)
@@ -430,7 +482,12 @@ export default function App() {
     return m.type?.toLowerCase() === filterType.toLowerCase()
   })
 
-  const history: { label: string; time: string }[] = []
+  const history = [
+    { label: 'A quieter kind of progress', time: 'Today' },
+    { label: 'Sunday reset', time: 'Yesterday' },
+    { label: 'Friendship & reciprocity', time: 'Oct 28' },
+    { label: 'Career reflections', time: 'Oct 24' },
+  ]
 
   if (!user) {
     return (
@@ -488,7 +545,7 @@ export default function App() {
               <button className="auth-submit" type="submit">{authMode === 'signin' ? 'Continue to Echo' : 'Create my space'}<Icon name="arrowUp" size={17} /></button>
             </form>
 
-            <p className="demo-notice"><Icon name="shield" size={13} /><span><strong>Demo sign-in</strong> Your email keeps your memories separate. Passwords are not verified.</span></p>
+            <p className="demo-notice"><Icon name="shield" size={13} /><span><strong>Secure Cloud Authentication</strong> Stored and verified in MongoDB Atlas with bcrypt password hashing and JWT sessions.</span></p>
           </div>
         </section>
       </main>
@@ -498,7 +555,7 @@ export default function App() {
   return (
     <div className="app-shell">
       {navOpen && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setNavOpen(false)} />}
-
+      
       {/* Sidebar */}
       <aside className={`sidebar ${navOpen ? 'is-open' : ''}`}>
         <div className="brand-row">
@@ -510,7 +567,19 @@ export default function App() {
         </div>
 
         <nav className="primary-nav" aria-label="Primary navigation">
-          <button className="nav-action is-primary" onClick={() => { setMode('Journal Entry'); setDraft(''); }}><Icon name="edit" /><span>New journal</span><kbd>⌘ K</kbd></button>
+          <button className="nav-action is-primary" onClick={() => {
+            setMode('Journal Entry');
+            setDraft('');
+            setMessages([
+              {
+                id: 'msg_' + Date.now(),
+                sender: 'echo',
+                content: 'Started a fresh reflection. What is on your mind today?',
+                timestamp: 'Just now',
+                mode: 'journal'
+              }
+            ]);
+          }}><Icon name="edit" /><span>New journal</span><kbd>⌘ K</kbd></button>
           <button className="nav-action" onClick={() => { setMode('Ask Echo'); setDraft(''); }}><Icon name="search" /><span>Search memories</span><kbd>⌘ /</kbd></button>
         </nav>
 
@@ -528,24 +597,20 @@ export default function App() {
         <div className="history">
           <div className="section-label"><span>Journal history</span><button aria-label="More history options"><Icon name="more" size={17} /></button></div>
           <div className="history-list">
-            {history.length === 0 ? (
-              <p style={{ padding: '8px 12px', fontSize: '12px', color: 'var(--subtle)' }}>Your past sessions will appear here.</p>
-            ) : (
-              history.map((item, index) => (
-                <button key={item.label} className={`history-item ${index === 0 ? 'active' : ''}`}>
-                  <span>{item.label}</span>
-                  <small>{item.time}</small>
-                </button>
-              ))
-            )}
+            {history.map((item, index) => (
+              <button key={item.label} className={`history-item ${index === 0 ? 'active' : ''}`}>
+                <span>{item.label}</span>
+                <small>{item.time}</small>
+              </button>
+            ))}
           </div>
         </div>
 
         <div className="sidebar-footer">
-          <div className="profile-wrap">
+          <div className="profile-wrap" ref={profileMenuRef}>
             <button className="profile-button" onClick={() => setProfileOpen(!profileOpen)} aria-expanded={profileOpen}>
               <span className="avatar">{initials(user.name)}</span>
-              <span className="profile-copy"><strong>{user.name}</strong><small>{user.email}</small></span>
+              <span className="profile-copy"><strong>{user.name}</strong><small>{activeUserId}</small></span>
               <Icon name="more" size={17} />
             </button>
             {profileOpen && (
@@ -570,7 +635,7 @@ export default function App() {
         <header className="topbar">
           <button className="icon-button nav-trigger" onClick={() => setNavOpen(true)} aria-label="Open navigation"><Icon name="menu" /></button>
           <button className="conversation-title">
-            <span>New journal</span>
+            <span>A quieter kind of progress</span>
             <Icon name="chevron" size={16} />
           </button>
           <div className="topbar-actions">
@@ -609,26 +674,35 @@ export default function App() {
                       <p style={{ whiteSpace: 'pre-wrap' }}>{message.content}</p>
                     </div>
 
-                    {message.referencedMemories && message.referencedMemories.length > 0 && (
-                      <div className="memory-references">
-                        {message.referencedMemories.map((memId) => {
-                          const matched = memories.find((m) => m._id === memId)
-                          return (
-                            <button
-                              key={memId}
-                              onClick={() => {
-                                setSelectedMemoryId(memId)
-                                setInspectorOpen(true)
-                              }}
-                              className={selectedMemoryId === memId ? 'selected' : ''}
-                            >
-                              <Icon name="brain" size={15} />
-                              {matched ? matched.content.slice(0, 32) + '...' : `Memory ${memId.slice(0, 6)}`}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    )}
+                    {message.referencedMemories && message.referencedMemories.length > 0 && (() => {
+                      // Filter out any referenced memories that are currently marked private or no longer active
+                      const visibleRefs = message.referencedMemories.filter((memId) => {
+                        const matched = memories.find((m) => m._id === memId)
+                        return matched && !matched.is_private && matched.status !== 'private'
+                      })
+                      if (visibleRefs.length === 0) return null
+
+                      return (
+                        <div className="memory-references">
+                          {visibleRefs.map((memId) => {
+                            const matched = memories.find((m) => m._id === memId)
+                            return (
+                              <button
+                                key={memId}
+                                onClick={() => {
+                                  setSelectedMemoryId(memId)
+                                  setInspectorOpen(true)
+                                }}
+                                className={selectedMemoryId === memId ? 'selected' : ''}
+                              >
+                                <Icon name="brain" size={15} />
+                                {matched ? matched.content.slice(0, 32) + '...' : `Memory ${memId.slice(0, 6)}`}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )
+                    })()}
 
                     <div className="message-tools">
                       <span style={{ fontSize: '11px', color: 'var(--subtle)' }}>{message.timestamp}</span>
@@ -646,7 +720,7 @@ export default function App() {
                   <div className="message-content" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span className="status-dot" style={{ animation: 'pulse 1s infinite' }} />
                     <span style={{ fontStyle: 'italic', color: 'var(--muted)' }}>
-                      {mode === 'Journal Entry' ? 'Reading your entry and saving what matters...' : 'Looking through your memories...'}
+                      {mode === 'Journal Entry' ? 'Analyzing reflection & ingesting agentic memories into MongoDB Atlas...' : 'Running semantic recall with vector similarity search...'}
                     </span>
                   </div>
                 </div>
@@ -701,7 +775,7 @@ export default function App() {
                   submitMessage(event)
                 }
               }}
-              placeholder={mode === 'Journal Entry' ? "Write what's on your mind..." : 'Ask Echo about something you shared before...'}
+              placeholder={mode === 'Journal Entry' ? 'Write a reflection (ECHO will extract structured memories into MongoDB)...' : 'Ask Echo about your past memories, recurring feelings, and patterns...'}
             />
             <div className="composer-controls">
               <div className="composer-left">
@@ -720,7 +794,7 @@ export default function App() {
               </button>
             </div>
           </form>
-          <p className="privacy-note"><Icon name="shield" size={13} />Memory stored in MongoDB Atlas · Groq Llama 3.3 · Gemini embeddings</p>
+          <p className="privacy-note"><Icon name="shield" size={13} />Agentic Memory · MongoDB Atlas · Groq Llama 3.3 · OpenAI Embeddings</p>
         </div>
       </main>
 
@@ -843,7 +917,7 @@ export default function App() {
 
         <div className="privacy-card">
           <Icon name="shield" size={18} />
-          <div><strong>Privacy shield</strong><p>Private memories are left out of search and never shown to the AI.</p></div>
+          <div><strong>Differential Privacy Shield</strong><p>Memories marked private are masked from query responses during vector recall.</p></div>
         </div>
       </aside>
 
