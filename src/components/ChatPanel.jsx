@@ -7,11 +7,10 @@ import {
   Sparkles, 
   ShieldAlert, 
   ExternalLink, 
-  CornerDownLeft,
   Bot,
   User,
-  Clock,
-  ArrowRight
+  ArrowRight,
+  Eye
 } from 'lucide-react';
 
 export default function ChatPanel() {
@@ -21,7 +20,8 @@ export default function ChatPanel() {
     isLoading, 
     memories, 
     setHighlightedMemoryId,
-    setActiveTabMobile 
+    openMemoryDetail,
+    setIsQuickInspectorOpen
   } = useApp();
 
   const [inputVal, setInputVal] = useState('');
@@ -61,7 +61,7 @@ export default function ChatPanel() {
 
   const handleJumpToMemory = (id) => {
     setHighlightedMemoryId(id);
-    setActiveTabMobile('inspector');
+    openMemoryDetail(id);
   };
 
   return (
@@ -73,31 +73,45 @@ export default function ChatPanel() {
             <BookOpen size={16} />
           </div>
           <div>
-            <h2 className="panel-title">Chat & Journal</h2>
-            <p className="panel-description">Reflect freely or ask questions grounded in your past</p>
+            <h2 className="panel-title">AI Journal & Chat</h2>
+            <p className="panel-description">Reflect freely or ask questions grounded in your evolving memory</p>
           </div>
         </div>
 
-        {/* Mode Selector Toggle */}
-        <div className="mode-toggle-group">
+        {/* Header Right Actions */}
+        <div className="chat-header-actions">
+          {/* Quick Peek Drawer Trigger */}
           <button 
-            type="button"
-            className={`mode-btn ${selectedMode === 'journal' ? 'active-journal' : ''}`}
-            onClick={() => setSelectedMode('journal')}
-            title="Journal Mode: Extracts structured memories and stores them in MongoDB"
+            type="button" 
+            className="chat-quick-peek-btn"
+            onClick={() => setIsQuickInspectorOpen(true)}
+            title="Open quick memory inspector pop-up drawer"
           >
-            <BookOpen size={13} />
-            <span>Journal</span>
+            <Eye size={13} />
+            <span>Quick Memory Peek</span>
           </button>
-          <button 
-            type="button"
-            className={`mode-btn ${selectedMode === 'query' ? 'active-query' : ''}`}
-            onClick={() => setSelectedMode('query')}
-            title="Recall Mode: Retrieves past memories via Semantic Vector Search"
-          >
-            <Search size={13} />
-            <span>Recall</span>
-          </button>
+
+          {/* Mode Selector Toggle */}
+          <div className="mode-toggle-group">
+            <button 
+              type="button"
+              className={`mode-btn ${selectedMode === 'journal' ? 'active-journal' : ''}`}
+              onClick={() => setSelectedMode('journal')}
+              title="Journal Mode: Extracts structured memories and stores them in MongoDB"
+            >
+              <BookOpen size={13} />
+              <span>Journal</span>
+            </button>
+            <button 
+              type="button"
+              className={`mode-btn ${selectedMode === 'query' ? 'active-query' : ''}`}
+              onClick={() => setSelectedMode('query')}
+              title="Recall Mode: Retrieves past memories via Semantic Vector Search"
+            >
+              <Search size={13} />
+              <span>Recall</span>
+            </button>
+          </div>
         </div>
       </div>
 

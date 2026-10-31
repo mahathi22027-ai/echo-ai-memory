@@ -1,32 +1,28 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { Clock, X, Zap, Calendar, AlertTriangle } from 'lucide-react';
+import { Clock, X, Zap, AlertTriangle } from 'lucide-react';
 
-export default function ExpiryModal() {
-  const { expiryModalTarget, setExpiryModalTarget, handleSetExpiry } = useApp();
-
-  if (!expiryModalTarget) return null;
-
+function ExpiryModalDialog({ target, onClose, onSetExpiry }) {
   const [customDateTime, setCustomDateTime] = useState('');
 
   const handlePreset = (seconds) => {
     const expiresAt = new Date(Date.now() + seconds * 1000).toISOString();
-    handleSetExpiry(expiryModalTarget._id, expiresAt);
+    onSetExpiry(target._id, expiresAt);
   };
 
   const handleCustomSubmit = (e) => {
     e.preventDefault();
     if (!customDateTime) return;
     const expiresAt = new Date(customDateTime).toISOString();
-    handleSetExpiry(expiryModalTarget._id, expiresAt);
+    onSetExpiry(target._id, expiresAt);
   };
 
   const handleClearExpiry = () => {
-    handleSetExpiry(expiryModalTarget._id, null);
+    onSetExpiry(target._id, null);
   };
 
   return (
-    <div className="modal-backdrop" onClick={() => setExpiryModalTarget(null)}>
+    <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="modal-title-row">
@@ -40,7 +36,7 @@ export default function ExpiryModal() {
           </div>
           <button 
             className="modal-close-btn" 
-            onClick={() => setExpiryModalTarget(null)}
+            onClick={onClose}
           >
             <X size={16} />
           </button>
@@ -48,8 +44,8 @@ export default function ExpiryModal() {
 
         <div className="modal-body">
           <div className="original-memory-preview">
-            <div className="preview-label">Target Memory ({expiryModalTarget._id}):</div>
-            <p className="preview-content">{expiryModalTarget.content}</p>
+            <div className="preview-label">Target Memory ({target._id}):</div>
+            <p className="preview-content">{target.content}</p>
           </div>
 
           <div className="modal-info-alert">
@@ -115,7 +111,7 @@ export default function ExpiryModal() {
         </div>
 
         <div className="modal-footer">
-          {expiryModalTarget.expires_at && (
+          {target.expires_at && (
             <button 
               type="button" 
               className="action-btn delete-btn"
@@ -127,12 +123,24 @@ export default function ExpiryModal() {
           <button 
             type="button" 
             className="action-btn secondary-btn"
-            onClick={() => setExpiryModalTarget(null)}
+            onClick={onClose}
           >
             Cancel
           </button>
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ExpiryModal() {
+  const { expiryModalTarget, setExpiryModalTarget, handleSetExpiry } = useApp();
+  if (!expiryModalTarget) return null;
+  return (
+    <ExpiryModalDialog 
+      target={expiryModalTarget}
+      onClose={() => setExpiryModalTarget(null)}
+      onSetExpiry={handleSetExpiry}
+    />
   );
 }

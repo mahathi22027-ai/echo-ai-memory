@@ -9,6 +9,7 @@ import {
   fetchMemoryEvents,
   sendChatMessage,
   updateMemory,
+  createMemory,
   deleteMemory,
   resetStorageToSeeds,
   getApiConfig,
@@ -26,25 +27,68 @@ export function AppProvider({ children }) {
     try {
       const saved = localStorage.getItem('echo_messages_v1');
       return saved ? JSON.parse(saved) : INITIAL_MESSAGES;
-    } catch (e) {
+    } catch (_e) {
       return INITIAL_MESSAGES;
     }
   });
   const [events, setEvents] = useState([]);
   
+  // Page Navigation & Theme States
+  const [activePage, setActivePage] = useState('chat'); // 'chat' | 'memories' | 'analytics' | 'studio'
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem('echo_theme') || 'aurora-light';
+    } catch (_e) {
+      return 'aurora-light';
+    }
+  });
+
   // UI & Filter States
   const [activeStatusFilter, setActiveStatusFilter] = useState('all');
   const [activeTypeFilter, setActiveTypeFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [highlightedMemoryId, setHighlightedMemoryId] = useState(null);
-  const [activeTabMobile, setActiveTabMobile] = useState('chat'); // 'chat' | 'inspector' | 'logs'
+  const [activeTabMobile, setActiveTabMobileState] = useState('chat'); // backward compatibility
+
+  // Unified page setter that syncs mobile tab
+  const handleSetActivePage = useCallback((page) => {
+    setActivePage(page);
+    if (page === 'memories') setActiveTabMobileState('inspector');
+    else if (page === 'analytics') setActiveTabMobileState('logs');
+    else setActiveTabMobileState('chat');
+  }, []);
+
+  const setActiveTabMobile = useCallback((tab) => {
+    setActiveTabMobileState(tab);
+    if (tab === 'inspector') setActivePage('memories');
+    else if (tab === 'logs') setActivePage('analytics');
+    else setActivePage('chat');
+  }, []);
   
-  // Loading & Modals
+  // Modals & Drawers
   const [isLoading, setIsLoading] = useState(false);
   const [supersedeModalTarget, setSupersedeModalTarget] = useState(null);
   const [expiryModalTarget, setExpiryModalTarget] = useState(null);
+  const [memoryDetailModalTarget, setMemoryDetailModalTarget] = useState(null);
+  const [isNewMemoryModalOpen, setIsNewMemoryModalOpen] = useState(false);
+  const [isQuickInspectorOpen, setIsQuickInspectorOpen] = useState(false);
   const [isApiSettingsOpen, setIsApiSettingsOpen] = useState(false);
   const [isDemoBarOpen, setIsDemoBarOpen] = useState(true);
+
+  // Sync theme attribute to HTML root
+  useEffect(() => {
+    try {
+      document.documentElement.setAttribute('data-theme', theme);
+      localStorage.setItem('echo_theme', theme);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme(prev => prev === 'aurora-light' ? 'cyber-dark' : 'aurora-light');
+  }, []);
 
   // Demo script states
   const [currentDemoStep, setCurrentDemoStep] = useState(null);
@@ -331,12 +375,45 @@ export function AppProvider({ children }) {
     return true;
   });
 
+  // Create new memory manually
+  const handleCreateMemory = async (memoryData) => {
+    try {
+      const res = await createMemory(memoryData);
+      await refreshAllData();
+      setIsNewMemoryModalOpen(false);
+      showToast(`Created new ${memoryData.type.toUpperCase()} memory in vault!`, 'success');
+      if (res?.memory?._id) {
+        setHighlightedMemoryId(res.memory._id);
+      }
+    } catch (err) {
+      showToast('Failed to create memory: ' + err.message, 'error');
+    }
+  };
+
+  const openMemoryDetail = useCallback((memoryOrId) => {
+    if (!memoryOrId) return;
+    if (typeof memoryOrId === 'string') {
+      const found = memories.find(m => m._id === memoryOrId);
+      if (found) {
+        setMemoryDetailModalTarget(found);
+      }
+    } else {
+      setMemoryDetailModalTarget(memoryOrId);
+    }
+  }, [memories]);
+
   const value = {
     memories,
     filteredMemories,
     messages,
     events,
     isLoading,
+    activePage,
+    setActivePage: handleSetActivePage,
+    isSidebarCollapsed,
+    setIsSidebarCollapsed,
+    theme,
+    toggleTheme,
     activeStatusFilter,
     setActiveStatusFilter,
     activeTypeFilter,
@@ -351,6 +428,13 @@ export function AppProvider({ children }) {
     setSupersedeModalTarget,
     expiryModalTarget,
     setExpiryModalTarget,
+    memoryDetailModalTarget,
+    setMemoryDetailModalTarget,
+    openMemoryDetail,
+    isNewMemoryModalOpen,
+    setIsNewMemoryModalOpen,
+    isQuickInspectorOpen,
+    setIsQuickInspectorOpen,
     isApiSettingsOpen,
     setIsApiSettingsOpen,
     isDemoBarOpen,
@@ -361,6 +445,7 @@ export function AppProvider({ children }) {
     backendStatus,
     toasts,
     sendMessage,
+    handleCreateMemory,
     handleSupersede,
     handleTogglePrivacy,
     handleSetExpiry,

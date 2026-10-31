@@ -1,25 +1,19 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { GitBranch, X, Check, Quote, AlertCircle } from 'lucide-react';
+import { GitBranch, X, Quote, AlertCircle } from 'lucide-react';
 
-export default function SupersedeModal() {
-  const { supersedeModalTarget, setSupersedeModalTarget, handleSupersede } = useApp();
-  
-  if (!supersedeModalTarget) return null;
-
-  const [newContent, setNewContent] = useState(
-    supersedeModalTarget.content || ''
-  );
-  const [newType, setNewType] = useState(supersedeModalTarget.type || 'feeling');
+function SupersedeModalDialog({ target, onClose, onSupersede }) {
+  const [newContent, setNewContent] = useState(target.content || '');
+  const [newType, setNewType] = useState(target.type || 'feeling');
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!newContent.trim()) return;
-    handleSupersede(supersedeModalTarget._id, newContent.trim(), newType);
+    onSupersede(target._id, newContent.trim(), newType);
   };
 
   return (
-    <div className="modal-backdrop" onClick={() => setSupersedeModalTarget(null)}>
+    <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="modal-title-row">
@@ -33,7 +27,7 @@ export default function SupersedeModal() {
           </div>
           <button 
             className="modal-close-btn" 
-            onClick={() => setSupersedeModalTarget(null)}
+            onClick={onClose}
           >
             <X size={16} />
           </button>
@@ -43,11 +37,11 @@ export default function SupersedeModal() {
           <div className="modal-body">
             {/* Original Memory Reference */}
             <div className="original-memory-preview">
-              <div className="preview-label">Original Active Memory ({supersedeModalTarget._id}):</div>
-              <p className="preview-content">{supersedeModalTarget.content}</p>
+              <div className="preview-label">Original Active Memory ({target._id}):</div>
+              <p className="preview-content">{target.content}</p>
               <div className="preview-quote">
                 <Quote size={12} />
-                <span>Source: "{supersedeModalTarget.source_quote}"</span>
+                <span>Source: "{target.source_quote}"</span>
               </div>
             </div>
 
@@ -94,7 +88,7 @@ export default function SupersedeModal() {
             <button 
               type="button" 
               className="action-btn secondary-btn"
-              onClick={() => setSupersedeModalTarget(null)}
+              onClick={onClose}
             >
               Cancel
             </button>
@@ -109,5 +103,17 @@ export default function SupersedeModal() {
         </form>
       </div>
     </div>
+  );
+}
+
+export default function SupersedeModal() {
+  const { supersedeModalTarget, setSupersedeModalTarget, handleSupersede } = useApp();
+  if (!supersedeModalTarget) return null;
+  return (
+    <SupersedeModalDialog 
+      target={supersedeModalTarget}
+      onClose={() => setSupersedeModalTarget(null)}
+      onSupersede={handleSupersede}
+    />
   );
 }
